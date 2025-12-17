@@ -81,6 +81,17 @@ export const Studio: React.FC<StudioProps> = ({ user, onBack }) => {
   const [streamKey, setStreamKey] = useState(() => localStorage.getItem('aether_stream_key') || '');
   
   const [cloudConnected, setCloudConnected] = useState(false);
+  const [desktopConnected, setDesktopConnected] = useState(false);
+  type ConnStatus =
+  | "idle"
+  | "connecting"
+  | "waiting_for_phone"
+  | "connected"
+  | "error";
+
+const [connStatus, setConnStatus] = useState<ConnStatus>("idle");
+
+
   const [peerId, setPeerId] = useState<string>('');
   
   // PERSISTENT ROOM ID
@@ -189,7 +200,7 @@ const peerServerDefaults = {
 };
 
 
-  // --- PeerJS Signaling Setup ---
+
   // --- PeerJS Signaling Setup ---
 useEffect(() => {
   // Generate the Safe ID: "aether-studio-xyz-host"
@@ -208,7 +219,10 @@ useEffect(() => {
   peer.on("open", (id) => {
     console.log("[PeerJS] open:", id);
     // optional: set UI status here
-    // setConnStatus?.("waiting_for_phone");
+      setConnStatus?.("waiting_for_phone");
+      setPeerId(id);
+      setCloudConnected(true);
+      setDesktopConnected(true); 
   });
 
   peer.on("connection", (conn: DataConnection) => {
