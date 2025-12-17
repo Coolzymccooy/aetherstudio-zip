@@ -1,0 +1,8 @@
+{
+  "name": "Aether Studio",
+  "description": "Next-generation browser-based streaming studio combining OBS-like compositing with Gemini AI-powered assets and audio processing.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

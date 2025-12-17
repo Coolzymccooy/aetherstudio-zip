@@ -1,0 +1,21 @@
+{
+  "name": "Aether Studio Cam",
+  "short_name": "AetherCam",
+  "start_url": "/?mode=companion",
+  "display": "standalone",
+  "background_color": "#0f0518",
+  "theme_color": "#0f0518",
+  "orientation": "landscape",
+  "icons": [
+    {
+      "src": "https://cdn.lucide.dev/camera.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "https://cdn.lucide.dev/camera.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}
