@@ -60,7 +60,6 @@ wss.on("connection", (ws, req) => {
           // Start FFmpeg: input is WebM chunks over stdin, output RTMPS
           ffmpeg = spawn("ffmpeg", [
             "-loglevel", "warning",
-            "-re",
             "-i", "pipe:0",
 
             // Video
@@ -71,9 +70,16 @@ wss.on("connection", (ws, req) => {
            "-r", "30",
            "-g", "60",
            "-keyint_min", "60",
-           "-b:v", "4500k",
-           "-maxrate", "4500k",
-           "-bufsize", "9000k",
+
+// Stable bitrate (good baseline for 720p/1080p)
+"-b:v", "4500k",
+"-maxrate", "4500k",
+"-bufsize", "9000k",
+
+"-c:a", "aac",
+"-b:a", "160k",
+"-ar", "44100",
+
 
 
             // Audio
@@ -146,7 +152,7 @@ wss.on("connection", (ws, req) => {
 server.listen(PORT, () => {
   console.log(`Relay listening on :${PORT}`);
   console.log("WS client connected");
-  console.log("start-stream received", { hasKey: !!streamKey });
+  console.log("start-stream received", { hasKey: !!(msg && msg.streamKey) });
   console.log("ffmpeg started");
 
 
