@@ -80,6 +80,9 @@ export const Studio: React.FC<StudioProps> = ({ user, onBack }) => {
   const [incomingRes, setIncomingRes] = useState<string>(""); // e.g. "3840×2160"
   const remoteCamVideoRef = useRef<HTMLVideoElement>(null);
   const mobileCamLayerIdRef = useRef<string | null>(null);
+  const [micPickerTrackId, setMicPickerTrackId] = useState<string | null>(null);
+ const [availableMics, setAvailableMics] = useState<MediaDeviceInfo[]>([]);
+
 
 
   // Persist Stream Key for validation workflow
@@ -113,6 +116,19 @@ const [connStatus, setConnStatus] = useState<ConnStatus>("idle");
   const localRecorderRef = useRef<MediaRecorder | null>(null);
   const localChunksRef = useRef<Blob[]>([]);
   const [statusMsg, setStatusMsg] = useState<{type: 'error' | 'info', text: string} | null>(null);
+  const hyperGateNodes = useRef<Map<string, {
+  input: GainNode;
+  hp: BiquadFilterNode;
+  analyser: AnalyserNode;
+  gate: GainNode;
+}>>(new Map());
+
+const hyperGateState = useRef<Map<string, {
+  isOpen: boolean;
+  lastAboveMs: number;
+  lastDb: number;
+}>>(new Map());
+
   
   // Audio Context
   const audioContext = useRef<AudioContext | null>(null);
@@ -188,6 +204,16 @@ const dataConnRef = useRef<DataConnection | null>(null);
         if (!audioSources.current.has(track.id)) {
             const source = ctx.createMediaStreamSource(track.stream);
             const gain = ctx.createGain();
+
+            const hg = createHyperGateChain(ctx);
+            source.connect(hg.input);
+            hg.gate.connect(gain);
+            gain.connect(dest);
+            audioSources.current.set(track.id, source);
+            audioGains.current.set(track.id, gain);
+            // store hypergate nodes for this track
+            hyperGateNodes.current.set(track.id, hg);
+
             const filter = ctx.createBiquadFilter(); 
             source.connect(filter);
             filter.connect(gain);
@@ -199,14 +225,7 @@ const dataConnRef = useRef<DataConnection | null>(null);
         const gainNode = audioGains.current.get(track.id);
         const filterNode = audioFilters.current.get(track.id);
         if (gainNode) gainNode.gain.setTargetAtTime(track.muted ? 0 : (track.volume / 100), ctx.currentTime, 0.05);
-        if (filterNode) {
-            if (track.noiseCancellation) {
-                filterNode.type = 'highpass';
-                filterNode.frequency.setTargetAtTime(150, ctx.currentTime, 0.1); 
-            } else {
-                filterNode.type = 'allpass';
-            }
-        }
+       
     });
     // Try resume if suspended (though requires gesture)
     if (ctx.state === 'suspended') ctx.resume().catch(() => {});
@@ -220,6 +239,86 @@ const peerServerDefaults = {
   secure: true,
   path: "/",
 };
+
+useEffect(() => {
+  const ctx = audioContext.current;
+  if (!ctx) return;
+
+  const timer = window.setInterval(() => {
+    const now = Date.now();
+
+    hyperGateNodes.current.forEach((nodes, trackId) => {
+      const track = audioTracks.find(t => t.id === trackId);
+      if (!track || !track.noiseCancellation) return; // only active when toggled
+
+      const st = hyperGateState.current.get(trackId) || { isOpen: true, lastAboveMs: now, lastDb: -120 };
+      const db = rmsDbFromAnalyser(nodes.analyser);
+      st.lastDb = db;
+
+      // --- HyperGate params (tune these) ---
+      const thresholdDb = -45;   // raise (less negative) to gate more aggressively
+      const holdMs = 220;
+      const openGain = 1.0;
+      const closedGain = 0.03;   // small floor so it doesn't sound "dead"
+      const attack = 0.02;
+      const release = 0.10;
+
+      if (db > thresholdDb) {
+        st.lastAboveMs = now;
+        if (!st.isOpen) {
+          nodes.gate.gain.setTargetAtTime(openGain, ctx.currentTime, attack);
+          st.isOpen = true;
+        }
+      } else {
+        const since = now - st.lastAboveMs;
+        if (since > holdMs && st.isOpen) {
+          nodes.gate.gain.setTargetAtTime(closedGain, ctx.currentTime, release);
+          st.isOpen = false;
+        }
+      }
+
+      hyperGateState.current.set(trackId, st);
+    });
+  }, 60);
+
+  return () => window.clearInterval(timer);
+}, [audioTracks]);
+
+
+function createHyperGateChain(ctx: AudioContext) {
+  // input gain (unity)
+  const input = ctx.createGain();
+  input.gain.value = 1;
+
+  // highpass to reduce rumble (pre-gate)
+  const hp = ctx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 120;
+
+  // analyser for VAD-ish energy detection
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.85;
+
+  // gate gain (this is what opens/closes)
+  const gate = ctx.createGain();
+  gate.gain.value = 1;
+
+  input.connect(hp);
+  hp.connect(analyser);
+  hp.connect(gate);
+
+  return { input, hp, analyser, gate };
+}
+
+function rmsDbFromAnalyser(analyser: AnalyserNode) {
+  const buf = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+  const rms = Math.sqrt(sum / buf.length) || 1e-8;
+  return 20 * Math.log10(rms);
+}
 
 
 
@@ -370,9 +469,7 @@ try {
     vt.addEventListener?.("unmute", updateRes as any);
     vt.addEventListener?.("mute", updateRes as any);
   }
-} catch {}
-            mobileCamLayerIdRef.current = newLayer.id;
-             return [...prev, newLayer]; 
+} catch {}           
           }          
        });
        
@@ -651,13 +748,14 @@ try {
       }
 
       // Start Media Recorder to pump binary data
-     const preferred = 'video/webm;codecs=vp8,opus';
+     // Use a stable, widely-supported input format for FFmpeg
+const preferred = 'video/webm;codecs=vp8,opus';
 const options = MediaRecorder.isTypeSupported(preferred)
   ? { mimeType: preferred }
   : { mimeType: 'video/webm' };
 
+const recorder = new MediaRecorder(combinedStream, options);
 
-      const recorder = new MediaRecorder(combinedStream, options);
       
       recorder.ondataavailable = (e) => {
           if (e.data.size > 0 && streamingSocketRef.current?.readyState === WebSocket.OPEN) {
@@ -672,6 +770,16 @@ const options = MediaRecorder.isTypeSupported(preferred)
     }
   };
 
+   const openMicPicker = async (trackId: string) => {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const mics = devices.filter(d => d.kind === "audioinput");
+    setAvailableMics(mics);
+    setMicPickerTrackId(trackId);
+  } catch {
+    setStatusMsg({ type: "error", text: "Could not list microphones. Allow permissions first." });
+  }
+};
   const handleSignOut = () => {
      signOut(auth).catch(console.error);
      onBack();
@@ -699,6 +807,50 @@ const options = MediaRecorder.isTypeSupported(preferred)
       {showDeviceSelector && <DeviceSelectorModal onSelect={addCameraSource} onClose={() => setShowDeviceSelector(false)} />}
       {showQRModal && <QRConnectModal roomId={roomId} relayPort="" onClose={() => setShowQRModal(false)} />}
       {showHelpModal && <HelpModal onClose={() => setShowHelpModal(false)} />}
+
+        {micPickerTrackId && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div className="bg-aether-900 border border-aether-700 rounded-xl p-5 w-[520px] shadow-2xl">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-bold text-white">Select Microphone</h3>
+        <button onClick={() => setMicPickerTrackId(null)} className="text-gray-400 hover:text-white">
+          <X size={18} />
+        </button>
+      </div>
+
+      <div className="space-y-2 max-h-72 overflow-y-auto">
+        {availableMics.map(m => (
+          <button
+            key={m.deviceId}
+            onClick={async () => {
+              // Re-acquire a stream from selected mic and swap the track’s stream
+              try {
+                const s = await navigator.mediaDevices.getUserMedia({
+                  audio: { deviceId: { exact: m.deviceId } },
+                  video: false
+                });
+
+                setAudioTracks(prev =>
+                  prev.map(t => t.id === micPickerTrackId ? { ...t, stream: s } : t)
+                );
+
+                setMicPickerTrackId(null);
+                setStatusMsg({ type: "info", text: "Microphone switched." });
+              } catch {
+                setStatusMsg({ type: "error", text: "Failed to switch microphone." });
+              }
+            }}
+            className="w-full text-left px-4 py-3 rounded-lg bg-aether-800 hover:bg-aether-700 border border-aether-700 text-gray-200"
+          >
+            <div className="text-sm font-semibold">{m.label || "Microphone"}</div>
+            <div className="text-[10px] font-mono text-gray-500">{m.deviceId}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  </div>
+)}
+
 
       <header className="h-14 border-b border-aether-700 bg-aether-900/90 flex items-center justify-between px-6 z-10 backdrop-blur-md">
         <div className="flex items-center gap-2 cursor-pointer" onClick={onBack}>
@@ -756,7 +908,12 @@ const options = MediaRecorder.isTypeSupported(preferred)
           <div className="flex-1 p-8 flex items-center justify-center">
             <CanvasStage layers={layers} onCanvasReady={handleCanvasReady} selectedLayerId={selectedLayerId} onSelectLayer={setSelectedLayerId} onUpdateLayer={updateLayer} />
           </div>
-          <AudioMixer tracks={audioTracks} onUpdateTrack={updateAudioTrack} />
+          <AudioMixer
+  tracks={audioTracks}
+  onUpdateTrack={updateAudioTrack}
+  onOpenSettings={openMicPicker}
+/>
+
         </main>
         <div className="w-80 border-l border-aether-700 bg-aether-900 flex flex-col">
             <div className="flex border-b border-aether-700">
