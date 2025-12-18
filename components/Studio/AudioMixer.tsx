@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Mic, MicOff, Volume2, VolumeX, Sparkles, Activity, Smartphone, Settings, RefreshCw } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Mic, MicOff, Volume2, VolumeX, Sparkles, Activity, Smartphone, Settings  } from 'lucide-react';
 import { AudioTrackConfig } from '../../types';
 
 interface AudioMixerProps {
@@ -9,17 +9,18 @@ interface AudioMixerProps {
 }
 
 export const AudioMixer: React.FC<AudioMixerProps> = ({ tracks, onUpdateTrack, onOpenSettings }) => {
+  // Visualizer simulation state
   const [levels, setLevels] = useState<Record<string, number>>({});
   
   useEffect(() => {
     const interval = setInterval(() => {
       const newLevels: Record<string, number> = {};
       tracks.forEach(track => {
-        if (track.muted || !track.stream?.active) {
+        if (track.muted) {
           newLevels[track.id] = 0;
         } else {
-          // In a real app, use AnalyserNode. This simulates realistic fluctuation.
-          newLevels[track.id] = Math.random() * 50 + 30;
+          // Simulate audio levels fluctuating
+          newLevels[track.id] = Math.random() * 80 + 20;
         }
       });
       setLevels(newLevels);
