@@ -64,6 +64,7 @@ export const Studio: React.FC<StudioProps> = ({ user, onBack }) => {
   const [audioTracks, setAudioTracks] = useState<AudioTrackConfig[]>([]);
   const [streamStatus, setStreamStatus] = useState<StreamStatus>(StreamStatus.IDLE);
   
+  
   // Ref for Active Canvas to prevent stale closures in the Popout loop
   const activeCanvasRef = useRef<HTMLCanvasElement | null>(null);
   
@@ -74,7 +75,11 @@ export const Studio: React.FC<StudioProps> = ({ user, onBack }) => {
   const [showDeviceSelector, setShowDeviceSelector] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
-
+  const keepAliveRef = useRef<number | null>(null);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  const [incomingRes, setIncomingRes] = useState<string>(""); // e.g. "3840×2160"
+  const remoteCamVideoRef = useRef<HTMLVideoElement>(null);
+  const mobileCamLayerIdRef = useRef<string | null>(null);
 
 
   // Persist Stream Key for validation workflow
@@ -90,6 +95,7 @@ export const Studio: React.FC<StudioProps> = ({ user, onBack }) => {
   | "error";
 
 const [connStatus, setConnStatus] = useState<ConnStatus>("idle");
+
 
 
   const [peerId, setPeerId] = useState<string>('');
@@ -137,6 +143,22 @@ const dataConnRef = useRef<DataConnection | null>(null);
       return () => clearTimeout(timer);
     }
   }, [statusMsg]);
+
+  useEffect(() => {
+  const onSize = (e: Event) => {
+    const evt = e as CustomEvent<{ layerId: string; width: number; height: number }>;
+    const mobileId = mobileCamLayerIdRef.current;
+    if (!mobileId) return;
+
+    if (evt.detail?.layerId === mobileId) {
+      setIncomingRes(`${evt.detail.width}×${evt.detail.height}`);
+    }
+  };
+
+  window.addEventListener("aether:video-size", onSize as any);
+  return () => window.removeEventListener("aether:video-size", onSize as any);
+}, []);
+
 
   // --- Audio Engine Logic ---
   useEffect(() => {
@@ -203,77 +225,106 @@ const peerServerDefaults = {
 
   // --- PeerJS Signaling Setup ---
 useEffect(() => {
-  // Generate the Safe ID: "aether-studio-xyz-host"
   const myPeerId = getCleanPeerId(roomId, "host");
 
-  // Destroy old peer if any
+  // 1) Destroy old peer
   if (peerRef.current) {
     try { peerRef.current.destroy(); } catch {}
     peerRef.current = null;
   }
 
-  // Create Peer
-  const peer = new Peer(myPeerId, peerServerDefaults);
+  // 2) Clear old keepalive interval
+  if (keepAliveRef.current) {
+    window.clearInterval(keepAliveRef.current);
+    keepAliveRef.current = null;
+  }
+
+  // 3) Create Peer (IMPORTANT: include your peer server config here)
+  const peer = new Peer(myPeerId, {
+    host: "0.peerjs.com",
+    port: 443,
+    secure: true,
+    path: "/",
+    debug: 1,
+    config: {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+      ],
+    },
+  });
+
   peerRef.current = peer;
 
+  // 4) Keepalive (reconnect when peerjs cloud drops)
+  keepAliveRef.current = window.setInterval(() => {
+    const p = peerRef.current;
+    if (!p) return;
+    if ((p as any).disconnected) {
+      try { p.reconnect(); } catch {}
+    }
+  }, 5000);
+
+  // 5) Your existing handlers (keep your code here)
   peer.on("open", (id) => {
-    console.log("[PeerJS] open:", id);
-    // optional: set UI status here
-      setConnStatus?.("waiting_for_phone");
-      setPeerId(id);
-      setCloudConnected(true);
-      setDesktopConnected(true); 
+    setPeerId(id);
+    setCloudConnected(true);
+    setCloudError(null);
+    setStatusMsg({ type: "info", text: "Cloud Online." });
   });
 
-  peer.on("connection", (conn: DataConnection) => {
-    console.log("[PeerJS] incoming data connection:", conn.peer);
-
-    // keep ref
-    dataConnRef.current = conn;
-
-    conn.on("open", () => {
-      console.log("[PeerJS] data channel open");
-      // optional: conn.send({ type: "hello", role: "host" });
-    });
-
-    conn.on("data", (msg: any) => {
-      console.log("[PeerJS] data:", msg);
-
-      // Example message handling
-      // if (msg?.type === "PHONE_READY") { ... }
-      // if (msg?.type === "ICE_CANDIDATE") { ... }
-      // if (msg?.type === "OFFER") { ... }
-      // if (msg?.type === "ANSWER") { ... }
-    });
-
-    conn.on("close", () => {
-      console.log("[PeerJS] data channel closed");
-      if (dataConnRef.current === conn) dataConnRef.current = null;
-    });
-
-    conn.on("error", (err) => {
-      console.warn("[PeerJS] data channel error:", err);
-    });
+  peer.on("error", (err: any) => {
+    console.error("[Cloud] Error:", err.type, err.message);
+    setCloudConnected(false);
+    setCloudError(err.type || "error");
   });
 
-  peer.on("error", (err) => {
-    console.error("[PeerJS] error:", err);
-    // optional: set error UI
-    // setConnStatus?.("error");
+  peer.on("call", (call) => {
+    setStatusMsg({ type: "info", text: "Mobile Camera Incoming..." });
+    call.answer();
+    call.on("stream", (remoteStream) => handleMobileStream(remoteStream));
   });
 
-  peer.on("disconnected", () => {
-    console.warn("[PeerJS] disconnected - attempting reconnect");
-    try { peer.reconnect(); } catch {}
-  });
+  // 6) Optional: local WebSocket ONLY in local dev (keep yours here if you want)
+  let ws: WebSocket | null = null;
+ const wsUrl = import.meta.env.VITE_RELAY_WS_URL;
 
-  // cleanup
+if (wsUrl) {
+  try {
+    ws = new WebSocket(wsUrl);
+    streamingSocketRef.current = ws;
+
+    ws.onopen = () => {
+      ws?.send(JSON.stringify({
+        type: "join",
+        role: "host",
+        sessionId: roomId,
+        token: import.meta.env.VITE_RELAY_TOKEN // optional
+      }));
+    };
+
+    ws.onerror = () => {
+      setStatusMsg({ type: "error", text: "Relay connection failed" });
+    };
+  } catch {}
+}
+
+
+  // ✅ ONLY ONE cleanup return (at the very end)
   return () => {
-    try { peer.destroy(); } catch {}
-    if (peerRef.current === peer) peerRef.current = null;
-    if (dataConnRef.current) dataConnRef.current = null;
+    if (keepAliveRef.current) {
+      window.clearInterval(keepAliveRef.current);
+      keepAliveRef.current = null;
+    }
+
+    try { peerRef.current?.destroy(); } catch {}
+    peerRef.current = null;
+
+    try { streamingSocketRef.current?.close(); } catch {}
+    streamingSocketRef.current = null;
   };
 }, [roomId]);
+
 
   const handleMobileStream = (stream: MediaStream) => {
        setLayers(prev => {
@@ -283,11 +334,13 @@ useEffect(() => {
               const newLayers = [...prev];
               newLayers[existingLayerIndex] = {
                   ...newLayers[existingLayerIndex],
-                  src: stream 
+                  src: stream                   
               };
+              mobileCamLayerIdRef.current = newLayers[existingLayerIndex].id;
               return newLayers;
           } else {
               const newLayer: Layer = {
+                
                 id: generateId(),
                 type: SourceType.CAMERA,
                 label: 'Mobile Cam',
@@ -297,9 +350,32 @@ useEffect(() => {
                 zIndex: prev.length + 10,
                 style: { circular: false, border: true, borderColor: '#7c3aed' }
              };
-             return [...prev, newLayer];
-          }
+             // --- Incoming mobile video resolution verifier (host-side) ---
+try {
+  const vt = stream.getVideoTracks?.()?.[0];
+  if (vt) {
+    const updateRes = () => {
+      const s = vt.getSettings?.();
+      const w = s?.width;
+      const h = s?.height;
+      if (w && h) setIncomingRes(`${w}×${h}`);
+    };
+
+    // Initial + delayed checks (some browsers update late)
+    updateRes();
+    setTimeout(updateRes, 500);
+    setTimeout(updateRes, 1500);
+
+    // Track state changes
+    vt.addEventListener?.("unmute", updateRes as any);
+    vt.addEventListener?.("mute", updateRes as any);
+  }
+} catch {}
+            mobileCamLayerIdRef.current = newLayer.id;
+             return [...prev, newLayer]; 
+          }          
        });
+       
        
        setAudioTracks(prev => {
            const MOBILE_MIC_ID = 'mobile-mic-track';
@@ -319,6 +395,31 @@ useEffect(() => {
 
        setStatusMsg({ type: 'info', text: "Mobile Connected & Live!" });
        setShowQRModal(false);
+
+       // --- Incoming mobile video resolution verifier (host-side) ---
+try {
+  const vt = stream.getVideoTracks?.()?.[0];
+  if (vt) {
+    const updateRes = () => {
+      const s = vt.getSettings?.();
+      const w = s?.width;
+      const h = s?.height;
+      if (w && h) setIncomingRes(`${w}×${h}`);
+    };
+
+    // Initial + delayed checks (some browsers update late)
+    updateRes();
+    setTimeout(updateRes, 500);
+    setTimeout(updateRes, 1500);
+
+    // Track state changes
+    vt.addEventListener?.("unmute", updateRes as any);
+    vt.addEventListener?.("mute", updateRes as any);
+  }
+} catch {}
+
+
+       
   };
 
   const regenerateRoomId = () => {
@@ -541,7 +642,8 @@ useEffect(() => {
       if (streamingSocketRef.current && streamingSocketRef.current.readyState === WebSocket.OPEN) {
           streamingSocketRef.current.send(JSON.stringify({ 
               type: 'start-stream', 
-              streamKey: streamKey 
+               streamKey,
+               token: import.meta.env.VITE_RELAY_TOKEN             
           }));
       } else {
           setStatusMsg({ type: 'error', text: "Backend server not found (localhost:8080)" });
@@ -578,11 +680,21 @@ useEffect(() => {
   return (
     <div className="fixed inset-0 flex flex-col w-full bg-aether-900 text-gray-200 font-sans selection:bg-aether-500 selection:text-white relative overflow-hidden">
       <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
-      {statusMsg && (
-          <div className={`fixed top-20 left-1/2 -translate-x-1/2 px-6 py-3 rounded-xl text-sm font-bold flex items-center gap-3 shadow-2xl animate-in fade-in slide-in-from-top-4 z-[9999] border ${statusMsg.type === 'error' ? 'bg-red-600/90 border-red-400' : 'bg-blue-600/90 border-blue-400'} backdrop-blur-md`}>
-             <AlertCircle size={20} /> {statusMsg.text}
-          </div>
-      )}
+     {statusMsg && (
+  <div className="fixed top-20 left-1/2 -translate-x-1/2 px-6 py-3 rounded-xl text-sm font-bold flex flex-col items-center gap-1 shadow-lg">
+    <div className="flex items-center gap-3">
+      <AlertCircle size={20} />
+      <span>{statusMsg.text}</span>
+    </div>
+
+    {incomingRes && (
+      <div className="text-[11px] font-mono opacity-80">
+        Incoming: {incomingRes}
+      </div>
+    )}
+  </div>
+)}
+
 
       {showDeviceSelector && <DeviceSelectorModal onSelect={addCameraSource} onClose={() => setShowDeviceSelector(false)} />}
       {showQRModal && <QRConnectModal roomId={roomId} relayPort="" onClose={() => setShowQRModal(false)} />}

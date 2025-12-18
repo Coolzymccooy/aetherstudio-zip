@@ -89,14 +89,20 @@ export const MobileStudio: React.FC<MobileStudioProps> = ({ user }) => {
           const audioConstraints = selectedAudioId ? { deviceId: { exact: selectedAudioId } } : true;
 
           const stream = await navigator.mediaDevices.getUserMedia({
-              video: { 
-                  facingMode: facingMode,
-                  width: { ideal: 1280 }, 
-                  height: { ideal: 720 },
-                  frameRate: { ideal: 30 }
+              video: {
+              facingMode,
+              width:  { ideal: 3840 },
+              height: { ideal: 2160 },
+              frameRate: { ideal: 30, max: 30 },
+              aspectRatio: { ideal: 16 / 9 }
               },
               audio: audioConstraints
           });
+          
+           const vt = stream.getVideoTracks()[0];
+           const s = vt.getSettings();
+           addLog(`Cam settings: ${s.width}x${s.height} @${s.frameRate ?? "?"}fps`);
+
 
           // Track Monitoring for Interruptions
           stream.getVideoTracks()[0].onended = () => {
