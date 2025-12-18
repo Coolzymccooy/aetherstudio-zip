@@ -646,16 +646,16 @@ try {
                token: import.meta.env.VITE_RELAY_TOKEN             
           }));
       } else {
-          setStatusMsg({ type: 'error', text: "Backend server not found (localhost:8080)" });
+          setStatusMsg({ type: 'error', text: "Relay not connected" });
           return;
       }
 
       // Start Media Recorder to pump binary data
-      const mimeType = 'video/webm;codecs=h264'; // Chrome supports this well for streaming
-      // Check support
-      const options = MediaRecorder.isTypeSupported(mimeType) 
-          ? { mimeType } 
-          : { mimeType: 'video/webm' };
+     const preferred = 'video/webm;codecs=vp8,opus';
+const options = MediaRecorder.isTypeSupported(preferred)
+  ? { mimeType: preferred }
+  : { mimeType: 'video/webm' };
+
 
       const recorder = new MediaRecorder(combinedStream, options);
       
@@ -666,7 +666,7 @@ try {
           }
       };
 
-      recorder.start(100); // 100ms chunks for low latency
+      recorder.start(250); // 250ms chunks for low latency
       mediaRecorderRef.current = recorder;
       setStreamStatus(StreamStatus.LIVE);
     }

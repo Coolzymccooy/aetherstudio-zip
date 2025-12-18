@@ -64,15 +64,17 @@ wss.on("connection", (ws, req) => {
             "-i", "pipe:0",
 
             // Video
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-tune", "zerolatency",
-            "-pix_fmt", "yuv420p",
-            "-g", "60",
-            "-keyint_min", "60",
-            "-b:v", "4500k",
-            "-maxrate", "4500k",
-            "-bufsize", "9000k",
+           "-c:v", "libx264",
+           "-preset", "veryfast",
+           "-tune", "zerolatency",
+           "-pix_fmt", "yuv420p",
+           "-r", "30",
+           "-g", "60",
+           "-keyint_min", "60",
+           "-b:v", "4500k",
+           "-maxrate", "4500k",
+           "-bufsize", "9000k",
+
 
             // Audio
             "-c:a", "aac",
@@ -143,4 +145,9 @@ wss.on("connection", (ws, req) => {
 
 server.listen(PORT, () => {
   console.log(`Relay listening on :${PORT}`);
+  console.log("WS client connected");
+  console.log("start-stream received", { hasKey: !!streamKey });
+  console.log("ffmpeg started");
+
+
 });
