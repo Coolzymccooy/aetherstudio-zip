@@ -15,6 +15,67 @@ import { generateRoomId, getCleanPeerId } from '../../utils/peerId';
 import Peer, { DataConnection } from "peerjs";
 
 
+// --- PeerJS env (safe, never undefined host) ---
+type PeerEnv = { host: string; port: number; secure: boolean; path: string };
+
+function parseBool(v: unknown, fallback: boolean) {
+  if (typeof v !== "string") return fallback;
+  const s = v.trim().toLowerCase();
+  if (s === "true") return true;
+  if (s === "false") return false;
+  return fallback;
+}
+
+function parseNum(v: unknown, fallback: number) {
+  if (typeof v !== "string") return fallback;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function resolvePeerEnv(): PeerEnv {
+  const rawHost = (import.meta.env.VITE_PEER_HOST as string | undefined) ?? "";
+  const cleanedHost = rawHost.replace(/^https?:\/\//i, "").trim();
+
+  const rawSecure = import.meta.env.VITE_PEER_SECURE as string | undefined;
+  const secure = parseBool(rawSecure, cleanedHost ? true : false);
+
+  const rawPort = import.meta.env.VITE_PEER_PORT as string | undefined;
+  const portDefault = cleanedHost ? (secure ? 443 : 80) : 9000;
+  const port = parseNum(rawPort, portDefault);
+
+  const rawPath = (import.meta.env.VITE_PEER_PATH as string | undefined) ?? "/peerjs";
+  const path = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+
+  return { host: cleanedHost || "localhost", port, secure, path };
+}
+
+async function peerDiagnostics(tag: string) {
+  const env = resolvePeerEnv();
+  const base = `${env.secure ? "https" : "http"}://${env.host}${env.secure && env.port === 443 ? "" : `:${env.port}`}`;
+
+  const healthUrl = `${base}/health`;
+  const idUrl = `${base}${env.path}/id`;
+
+  console.log(`[${tag}] peer config`, env);
+  console.log(`[${tag}] healthUrl`, healthUrl);
+  console.log(`[${tag}] idUrl`, idUrl);
+
+  try {
+    const r1 = await fetch(healthUrl);
+    console.log(`[${tag}] /health`, r1.status, await r1.text());
+  } catch (e) {
+    console.error(`[${tag}] /health FAILED`, e);
+  }
+
+  try {
+    const r2 = await fetch(idUrl);
+    console.log(`[${tag}] /peerjs/id`, r2.status, await r2.text());
+  } catch (e) {
+    console.error(`[${tag}] /peerjs/id FAILED`, e);
+  }
+}
+
+
 function getStickyHostPeerId(sessionCode: string) {
   const key = `aether:hostPeerId:${sessionCode}`;
   let id = sessionStorage.getItem(key);
@@ -233,12 +294,6 @@ const dataConnRef = useRef<DataConnection | null>(null);
 
 
 
-const peerServerDefaults = {
-  host: "0.peerjs.com",
-  port: 443,
-  secure: true,
-  path: "/",
-};
 
 useEffect(() => {
   const ctx = audioContext.current;
@@ -339,19 +394,25 @@ useEffect(() => {
   }
 
   // 3) Create Peer (IMPORTANT: include your peer server config here)
-  const peer = new Peer(myPeerId, {
-    host: "0.peerjs.com",
-    port: 443,
-    secure: true,
-    path: "/",
-    debug: 1,
-    config: {
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-      ],
-    },
-  });
+// Diagnostics: confirm phone/desktop can reach signaling before Peer init
+peerDiagnostics("desktop").catch(() => {});
+
+const env = resolvePeerEnv();
+
+const peer = new Peer(myPeerId, {
+  host: env.host,
+  port: env.port,
+  secure: env.secure,
+  path: env.path,
+  debug: 1,
+  config: {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" }
+    ]
+  }
+});
+
 
   peerRef.current = peer;
 
@@ -426,8 +487,10 @@ if (wsUrl) {
 
 
   const handleMobileStream = (stream: MediaStream) => {
-       setLayers(prev => {
-          const existingLayerIndex = prev.findIndex(l => l.label === 'Mobile Cam' && l.type === SourceType.CAMERA);
+      setLayers(prev => {
+  const safePrev = Array.isArray(prev) ? prev : [];
+  const existingLayerIndex = safePrev.findIndex(l => l.label === 'Mobile Cam' && l.type === SourceType.CAMERA);
+
           
           if (existingLayerIndex >= 0) {
               const newLayers = [...prev];

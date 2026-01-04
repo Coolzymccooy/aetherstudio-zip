@@ -9,35 +9,61 @@ interface QRConnectModalProps {
 
 export const QRConnectModal: React.FC<QRConnectModalProps> = ({ roomId, onClose }) => {
   // Initialize URL safely
-  const [baseUrl, setBaseUrl] = useState('');
+  // Initialize URL safely (origin only, no route path)
+const [baseUrl, setBaseUrl] = useState('');
 
-  useEffect(() => {
-    const href = window.location.href;
-    // Only set default if it looks like a real network URL
-    if (href && !href.startsWith('about:') && !href.startsWith('blob:') && !href.startsWith('data:')) {
-         const clean = href.split('?')[0].replace(/\/$/, '');
-         setBaseUrl(clean);
-    }
-  }, []);
+useEffect(() => {
+  // 1) Allow an explicit override (best for dev)
+  const forced = (import.meta as any).env?.VITE_MOBILE_BASE_URL as string | undefined;
+  if (forced && forced.trim()) {
+    setBaseUrl(forced.trim().replace(/\/$/, ''));
+    return;
+  }
+
+  // 2) Use last saved value if present
+  const saved = localStorage.getItem('aether_mobile_base_url');
+  if (saved) {
+    setBaseUrl(saved.replace(/\/$/, ''));
+    return;
+  }
+
+  // 3) Default to origin (NOT href) so we don't include /studio or query strings
+  const origin = window.location.origin;
+  if (origin && !origin.startsWith('about:') && !origin.startsWith('blob:') && !origin.startsWith('data:')) {
+    setBaseUrl(origin.replace(/\/$/, ''));
+  }
+}, []);
+
+// Persist edits so you don't retype LAN IP every time
+useEffect(() => {
+  if (baseUrl?.trim()) localStorage.setItem('aether_mobile_base_url', baseUrl.trim().replace(/\/$/, ''));
+}, [baseUrl]);
+
+
   
   // Check protocols
   const isFile = baseUrl.startsWith('file:');
   const isInvalid = !baseUrl || baseUrl.startsWith('about:') || baseUrl.startsWith('blob:');
 
   // Construct the final Mobile URL for PeerJS mode
-  const getMobileUrl = () => {
-    let url = baseUrl.trim();
-    if (!url) return '';
+const getMobileUrl = () => {
+  let url = baseUrl.trim();
+  if (!url) return '';
 
-    // Ensure protocol exists (phones need http:// or https://)
-    if (!url.startsWith('http') && !url.startsWith('https') && !url.startsWith('file')) {
-        url = `https://${url}`;
-    }
+  // Ensure protocol exists (phones need http:// or https://)
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    url = `https://${url}`;
+  }
 
-    const separator = url.includes('?') ? '&' : '?';
-    // Append timestamp to prevent caching issues
-    return `${url}${separator}mode=companion&room=${roomId}&t=${Date.now()}`;
-  };
+  // Force root origin (strip any accidental path like /studio)
+  try {
+    const u = new URL(url);
+    url = `${u.protocol}//${u.host}`;
+  } catch {}
+
+  return `${url}/?mode=companion&room=${encodeURIComponent(roomId)}&t=${Date.now()}`;
+};
+
 
   const mobileUrl = getMobileUrl();
   const canShowQr = mobileUrl && !isFile && !isInvalid;

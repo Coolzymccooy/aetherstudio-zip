@@ -72,8 +72,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
             video.setAttribute('webkit-playsinline', '');
             
             // Critical: Set sufficient size so browser doesn't optimize it away
-            video.width = 1280;
-            video.height = 720;
+            video.width = 3840;
+            video.height = 2160;
             
             Object.assign(video.style, {
                 position: 'absolute',
@@ -95,6 +95,24 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
             video.addEventListener('loadedmetadata', forcePlay);
             video.addEventListener('canplay', forcePlay);
             video.addEventListener('pause', forcePlay);
+
+            // Report decoded video size to the app (render truth)
+const reportSize = () => {
+  const w = video?.videoWidth;
+  const h = video?.videoHeight;
+  if (w && h) {
+    window.dispatchEvent(
+      new CustomEvent("aether:video-size", {
+        detail: { layerId: layer.id, width: w, height: h }
+      })
+    );
+  }
+};
+
+video.addEventListener("loadedmetadata", reportSize);
+video.addEventListener("resize", reportSize as any); // some browsers fire resize when dimensions change
+video.addEventListener("canplay", () => setTimeout(reportSize, 0));
+
 
             container.appendChild(video);
             videoElementsRef.current.set(layer.id, video);

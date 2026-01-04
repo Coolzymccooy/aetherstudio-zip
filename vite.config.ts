@@ -6,9 +6,16 @@ export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
       server: {
-          host: '127.0.0.1',
+          host: true,
  	 port: 5173,
  	 strictPort: true,
+   allowedHosts: true, // <- allow changing trycloudflare hostnames
+     preview: {
+      host: true,
+  port: 5173,
+  strictPort: true,
+  allowedHosts: true,      
+    },
       },
       plugins: [react()],
       define: {
