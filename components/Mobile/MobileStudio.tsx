@@ -16,6 +16,24 @@ import {
   X,
 } from "lucide-react";
 import Peer, { DataConnection, MediaConnection } from "peerjs";
+
+// --- Runtime config (Vercel/Render friendly) ---
+const VITE_PEER_HOST = (import.meta as any).env?.VITE_PEER_HOST as string | undefined;
+const VITE_PEER_PATH = ((import.meta as any).env?.VITE_PEER_PATH as string | undefined) || '/peerjs';
+const VITE_PEER_PORT = Number(((import.meta as any).env?.VITE_PEER_PORT as string | undefined) || 443);
+
+function buildPeerOptions() {
+  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  if (VITE_PEER_HOST) {
+    return {
+      host: VITE_PEER_HOST,
+      port: isLocalhost ? Number(((import.meta as any).env?.VITE_PEER_PORT as any) || 9000) : VITE_PEER_PORT,
+      secure: !isLocalhost,
+      path: VITE_PEER_PATH,
+    } as const;
+  }
+  return {} as const;
+}
 import { User } from "firebase/auth";
 import { getCleanPeerId } from "../../utils/peerId";
 
@@ -328,7 +346,10 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
 
     addLog(`ID: ${roomId} -> Cloud...`);
 
-    const peer = new Peer(myId, { debug: 1 });
+    const peer = new Peer(myId, { debug: 1, host: "aetherstudio-zip-1.onrender.com",
+  port: 443,
+  secure: true,
+  path: "/peerjs", });
     peerRef.current = peer;
 
     peer.on("open", () => {

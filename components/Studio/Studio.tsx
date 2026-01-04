@@ -1,6 +1,28 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Monitor, Camera, Image as ImageIcon, Type, Circle, Zap, Settings, PlaySquare, StopCircle, Radio, X, Sliders, Sparkles, Download, Package, FolderInput, Network, ExternalLink, AlertCircle, Smartphone, HelpCircle, Disc, Square, Cloud, LogOut, Link as LinkIcon, RefreshCw, Activity, Tv } from 'lucide-react';
 //import Peer from 'peerjs';
+
+// --- Runtime config (Vercel/Render friendly) ---
+const VITE_PEER_HOST = (import.meta as any).env?.VITE_PEER_HOST as string | undefined;
+const VITE_PEER_PATH = ((import.meta as any).env?.VITE_PEER_PATH as string | undefined) || '/peerjs';
+const VITE_PEER_PORT = Number(((import.meta as any).env?.VITE_PEER_PORT as string | undefined) || 443);
+const VITE_SIGNAL_URL = (import.meta as any).env?.VITE_SIGNAL_URL as string | undefined;
+const VITE_RELAY_TOKEN = (import.meta as any).env?.VITE_RELAY_TOKEN as string | undefined;
+
+function buildPeerOptions() {
+  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  // If you set VITE_PEER_HOST, we assume you're pointing at your own PeerJS server.
+  if (VITE_PEER_HOST) {
+    return {
+      host: VITE_PEER_HOST,
+      port: isLocalhost ? Number(((import.meta as any).env?.VITE_PEER_PORT as any) || 9000) : VITE_PEER_PORT,
+      secure: !isLocalhost,
+      path: VITE_PEER_PATH,
+    } as const;
+  }
+  // Default PeerJS Cloud (0.peerjs.com)
+  return {} as const;
+}
 import { CanvasStage } from './CanvasStage';
 import { AudioMixer } from './AudioMixer';
 import { AIPanel } from '../AI/AIPanel';
@@ -13,67 +35,6 @@ import { auth } from '../../services/firebase';
 import { signOut, User } from 'firebase/auth';
 import { generateRoomId, getCleanPeerId } from '../../utils/peerId';
 import Peer, { DataConnection } from "peerjs";
-
-
-// --- PeerJS env (safe, never undefined host) ---
-type PeerEnv = { host: string; port: number; secure: boolean; path: string };
-
-function parseBool(v: unknown, fallback: boolean) {
-  if (typeof v !== "string") return fallback;
-  const s = v.trim().toLowerCase();
-  if (s === "true") return true;
-  if (s === "false") return false;
-  return fallback;
-}
-
-function parseNum(v: unknown, fallback: number) {
-  if (typeof v !== "string") return fallback;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function resolvePeerEnv(): PeerEnv {
-  const rawHost = (import.meta.env.VITE_PEER_HOST as string | undefined) ?? "";
-  const cleanedHost = rawHost.replace(/^https?:\/\//i, "").trim();
-
-  const rawSecure = import.meta.env.VITE_PEER_SECURE as string | undefined;
-  const secure = parseBool(rawSecure, cleanedHost ? true : false);
-
-  const rawPort = import.meta.env.VITE_PEER_PORT as string | undefined;
-  const portDefault = cleanedHost ? (secure ? 443 : 80) : 9000;
-  const port = parseNum(rawPort, portDefault);
-
-  const rawPath = (import.meta.env.VITE_PEER_PATH as string | undefined) ?? "/peerjs";
-  const path = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
-
-  return { host: cleanedHost || "localhost", port, secure, path };
-}
-
-async function peerDiagnostics(tag: string) {
-  const env = resolvePeerEnv();
-  const base = `${env.secure ? "https" : "http"}://${env.host}${env.secure && env.port === 443 ? "" : `:${env.port}`}`;
-
-  const healthUrl = `${base}/health`;
-  const idUrl = `${base}${env.path}/id`;
-
-  console.log(`[${tag}] peer config`, env);
-  console.log(`[${tag}] healthUrl`, healthUrl);
-  console.log(`[${tag}] idUrl`, idUrl);
-
-  try {
-    const r1 = await fetch(healthUrl);
-    console.log(`[${tag}] /health`, r1.status, await r1.text());
-  } catch (e) {
-    console.error(`[${tag}] /health FAILED`, e);
-  }
-
-  try {
-    const r2 = await fetch(idUrl);
-    console.log(`[${tag}] /peerjs/id`, r2.status, await r2.text());
-  } catch (e) {
-    console.error(`[${tag}] /peerjs/id FAILED`, e);
-  }
-}
 
 
 function getStickyHostPeerId(sessionCode: string) {
@@ -294,6 +255,12 @@ const dataConnRef = useRef<DataConnection | null>(null);
 
 
 
+const peerServerDefaults = {
+  host: "0.peerjs.com",
+  port: 443,
+  secure: true,
+  path: "/",
+};
 
 useEffect(() => {
   const ctx = audioContext.current;
@@ -394,16 +361,11 @@ useEffect(() => {
   }
 
   // 3) Create Peer (IMPORTANT: include your peer server config here)
-// Diagnostics: confirm phone/desktop can reach signaling before Peer init
-peerDiagnostics("desktop").catch(() => {});
-
-const env = resolvePeerEnv();
-
 const peer = new Peer(myPeerId, {
-  host: env.host,
-  port: env.port,
-  secure: env.secure,
-  path: env.path,
+  host: import.meta.env.VITE_PEER_HOST,
+  port: Number(import.meta.env.VITE_PEER_PORT || 443),
+  secure: String(import.meta.env.VITE_PEER_SECURE) !== "false",
+  path: import.meta.env.VITE_PEER_PATH || "/peerjs",
   debug: 1,
   config: {
     iceServers: [
