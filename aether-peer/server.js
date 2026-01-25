@@ -1,36 +1,29 @@
-// aether-peer/server.js (CommonJS)
-
-
-
+// server.js (CommonJS)
 const http = require("http");
 const express = require("express");
 const cors = require("cors");
 const { ExpressPeerServer } = require("peer");
 
 const app = express();
-const PORT = process.env.PORT || 10000;
-const PEER_PATH = "/peerjs";
-
 app.use(cors());
 
-// health check
-app.get("/health", (_, res) => res.send("ok"));
+const PORT = Number(process.env.PORT || 9000);
+const PEER_PATH = process.env.PEER_PATH || "/peerjs";
 
-// create HTTP server FIRST
+app.get("/health", (_, res) => res.status(200).json({ ok: true, peerPath: PEER_PATH }));
+
 const server = http.createServer(app);
 
-// attach PeerJS to the server
+// IMPORTANT: path MUST be "/" when you mount at PEER_PATH
 const peerServer = ExpressPeerServer(server, {
-  path: "/",
+  path: "/",                // <- not "/peerjs"
   allow_discovery: true,
   proxied: true,
-  debug: true
+  debug: true,
 });
 
-// mount PeerJS ONCE
 app.use(PEER_PATH, peerServer);
 
-// start listening
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`[peer] listening on ${PORT} path=${PEER_PATH}`);
+  console.log(`[peer] listening on ${PORT} mount=${PEER_PATH} internal=/`);
 });
