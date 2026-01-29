@@ -1,28 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Monitor, Camera, Image as ImageIcon, Type, Circle, Zap, Settings, PlaySquare, StopCircle, Radio, X, Sliders, Sparkles, Download, Package, FolderInput, Network, ExternalLink, AlertCircle, Smartphone, HelpCircle, Disc, Square, Cloud, LogOut, Link as LinkIcon, RefreshCw, Activity, Tv } from 'lucide-react';
 //import Peer from 'peerjs';
-
-// --- Runtime config (Vercel/Render friendly) ---
-const VITE_PEER_HOST = (import.meta as any).env?.VITE_PEER_HOST as string | undefined;
-const VITE_PEER_PATH = ((import.meta as any).env?.VITE_PEER_PATH as string | undefined) || '/peerjs';
-const VITE_PEER_PORT = Number(((import.meta as any).env?.VITE_PEER_PORT as string | undefined) || 443);
-const VITE_SIGNAL_URL = (import.meta as any).env?.VITE_SIGNAL_URL as string | undefined;
-const VITE_RELAY_TOKEN = (import.meta as any).env?.VITE_RELAY_TOKEN as string | undefined;
-
-function buildPeerOptions() {
-  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  // If you set VITE_PEER_HOST, we assume you're pointing at your own PeerJS server.
-  if (VITE_PEER_HOST) {
-    return {
-      host: VITE_PEER_HOST,
-      port: isLocalhost ? Number(((import.meta as any).env?.VITE_PEER_PORT as any) || 9000) : VITE_PEER_PORT,
-      secure: !isLocalhost,
-      path: VITE_PEER_PATH,
-    } as const;
-  }
-  // Default PeerJS Cloud (0.peerjs.com)
-  return {} as const;
-}
+import { getPeerEnv} from "../../src/utils/peerEnv";
 import { CanvasStage } from './CanvasStage';
 import { AudioMixer } from './AudioMixer';
 import { AIPanel } from '../AI/AIPanel';
@@ -35,6 +14,8 @@ import { auth } from '../../services/firebase';
 import { signOut, User } from 'firebase/auth';
 import { generateRoomId, getCleanPeerId } from '../../utils/peerId';
 import Peer, { DataConnection } from "peerjs";
+
+
 
 
 function getStickyHostPeerId(sessionCode: string) {
@@ -165,6 +146,8 @@ const hyperGateState = useRef<Map<string, {
   const peerRef = useRef<Peer | null>(null);
     //const peerRef = useRef<Peer | null>(null);
 const dataConnRef = useRef<DataConnection | null>(null);
+  const cloudDisconnectTimerRef = useRef<number | null>(null);
+  const cloudSyncTimerRef = useRef<number | null>(null);
 
   // Update localStorage when key changes
   useEffect(() => {
@@ -342,63 +325,202 @@ function rmsDbFromAnalyser(analyser: AnalyserNode) {
   return 20 * Math.log10(rms);
 }
 
-
-
   // --- PeerJS Signaling Setup ---
 useEffect(() => {
   const myPeerId = getCleanPeerId(roomId, "host");
+  const peerEnv = getPeerEnv();
+  const rotateRoomId = () => {
+    const newId = generateRoomId();
+    localStorage.setItem("aether_host_room_id", newId);
+    setRoomId(newId);
+    setStatusMsg({ type: "info", text: "Room ID was in use. New room generated." });
+  };
+  const scheduleCloudOffline = () => {
+    if (cloudDisconnectTimerRef.current) window.clearTimeout(cloudDisconnectTimerRef.current);
+    cloudDisconnectTimerRef.current = window.setTimeout(() => {
+      setCloudConnected(false);
+      setStatusMsg({ type: "warn", text: "Cloud disconnected. Reconnecting..." });
+    }, 1500);
+  };
+  const clearCloudOffline = () => {
+    if (cloudDisconnectTimerRef.current) {
+      window.clearTimeout(cloudDisconnectTimerRef.current);
+      cloudDisconnectTimerRef.current = null;
+    }
+  };
 
-  // 1) Destroy old peer
-  if (peerRef.current) {
-    try { peerRef.current.destroy(); } catch {}
+  // --- timers/scoped vars for cleanup ---
+  let retryTimer: number | null = null;
+  let retryCount = 0;
+  let ws: WebSocket | null = null;
+
+  // ✅ Destroy old peer ONLY if it's different
+  const existing: any = peerRef.current;
+  if (existing && !existing.destroyed && existing.id !== myPeerId) {
+    try { existing.destroy(); } catch {}
     peerRef.current = null;
   }
 
-  // 2) Clear old keepalive interval
+  // ✅ Clear old keepalive
   if (keepAliveRef.current) {
     window.clearInterval(keepAliveRef.current);
     keepAliveRef.current = null;
   }
 
-  // 3) Create Peer (IMPORTANT: include your peer server config here)
-const peer = new Peer(myPeerId, {
-  host: import.meta.env.VITE_PEER_HOST,
-  port: Number(import.meta.env.VITE_PEER_PORT || 443),
-  secure: String(import.meta.env.VITE_PEER_SECURE) !== "false",
-  path: import.meta.env.VITE_PEER_PATH || "/peerjs",
-  debug: 1,
-  config: {
-    iceServers: [
-      { urls: "stun:stun.l.google.com:19302" },
-      { urls: "stun:stun1.l.google.com:19302" }
-    ]
-  }
-});
+  // ✅ If we already have the correct peer alive, don't recreate it,
+  // but DO ensure keepalive is running (important after refresh/HMR)
+  const stillAlive: any = peerRef.current;
+  if (stillAlive && !stillAlive.destroyed && stillAlive.id === myPeerId) {
+    if (stillAlive.id) setPeerId(stillAlive.id);
+    if (!stillAlive.disconnected) {
+      setCloudConnected(true);
+      setCloudError(null);
+    }
+    keepAliveRef.current = window.setInterval(() => {
+      const p: any = peerRef.current;
+      if (!p) return;
+      if (p.disconnected) {
+        try { p.reconnect(); } catch {}
+      }
+    }, 5000);
 
+    return () => {
+      if (keepAliveRef.current) {
+        window.clearInterval(keepAliveRef.current);
+        keepAliveRef.current = null;
+      }
+    };
+  }
+
+  // --- Create Peer ---
+  const peer = new Peer(myPeerId, {
+    debug: 1,
+    host: peerEnv.host,
+    port: peerEnv.port,
+    path: peerEnv.path,
+    secure: peerEnv.secure,
+    config: {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+      ],
+    },
+  });
 
   peerRef.current = peer;
 
-  // 4) Keepalive (reconnect when peerjs cloud drops)
+  // ✅ Make refresh/tab-close release the ID ASAP
+  const handleBeforeUnload = () => {
+    try { peer.destroy(); } catch {}
+  };
+  window.addEventListener("beforeunload", handleBeforeUnload);
+
+  // ✅ Retry helper for ID-TAKEN / unavailable-id
+  const retryIfIdTaken = () => {
+    if (retryTimer) window.clearTimeout(retryTimer);
+   if (retryCount >= 30) return; // retry for ~36s total (30 * 1200ms)
+
+
+    retryCount += 1;
+    retryTimer = window.setTimeout(() => {
+      const p: any = peerRef.current;
+      if (!p || p.destroyed) return;
+
+      try { p.destroy(); } catch {}
+      peerRef.current = null;
+
+      const env = getPeerEnv();
+      const next = new Peer(myPeerId, {
+        debug: 1,
+        host: env.host,
+        port: env.port,
+        path: env.path,
+        secure: env.secure,
+        config: {
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+          ],
+        },
+      });
+
+      peerRef.current = next;
+
+      next.on("open", (id) => {
+        setPeerId(id);
+        setCloudConnected(true);
+        setCloudError(null);
+        setStatusMsg({ type: "info", text: "Cloud Online." });
+      });
+
+      next.on("error", (err: any) => {
+        console.error("[Cloud] Error:", err?.type, err?.message, err);
+        setCloudConnected(false);
+        setCloudError(err?.type || "error");
+
+        const msg = String(err?.message || "");
+        if (err?.type === "unavailable-id" || msg.toLowerCase().includes("taken")) {
+          rotateRoomId();
+        }
+      });
+
+      next.on("call", (call) => {
+        setStatusMsg({ type: "info", text: "Mobile Camera Incoming..." });
+        call.answer();
+        call.on("stream", (remoteStream) => handleMobileStream(remoteStream));
+      });
+    }, 1200);
+  };
+
+  // --- Keepalive ---
   keepAliveRef.current = window.setInterval(() => {
-    const p = peerRef.current;
+    const p: any = peerRef.current;
     if (!p) return;
-    if ((p as any).disconnected) {
+    if (p.disconnected) {
       try { p.reconnect(); } catch {}
     }
   }, 5000);
 
-  // 5) Your existing handlers (keep your code here)
+  // --- Cloud status sync (handles missed open events / HMR) ---
+  if (cloudSyncTimerRef.current) window.clearInterval(cloudSyncTimerRef.current);
+  cloudSyncTimerRef.current = window.setInterval(() => {
+    const p: any = peerRef.current;
+    if (!p || p.destroyed) return;
+    if (p.open) {
+      setCloudConnected((prev) => (prev ? prev : true));
+      setCloudError(null);
+    }
+  }, 1000);
+
+  // --- Peer handlers ---
   peer.on("open", (id) => {
     setPeerId(id);
+    clearCloudOffline();
     setCloudConnected(true);
     setCloudError(null);
     setStatusMsg({ type: "info", text: "Cloud Online." });
   });
 
-  peer.on("error", (err: any) => {
-    console.error("[Cloud] Error:", err.type, err.message);
+  peer.on("disconnected", () => {
+    scheduleCloudOffline();
+    try { (peer as any).reconnect?.(); } catch {}
+  });
+
+  peer.on("close", () => {
+    clearCloudOffline();
     setCloudConnected(false);
-    setCloudError(err.type || "error");
+    setStatusMsg({ type: "warn", text: "Cloud closed." });
+  });
+
+  peer.on("error", (err: any) => {
+    console.error("[Cloud] Error:", err?.type, err?.message, err);
+    scheduleCloudOffline();
+    setCloudError(err?.type || "error");
+
+    const msg = String(err?.message || "");
+    if (err?.type === "unavailable-id" || msg.toLowerCase().includes("taken")) {
+      rotateRoomId();
+    }
   });
 
   peer.on("call", (call) => {
@@ -407,43 +529,66 @@ const peer = new Peer(myPeerId, {
     call.on("stream", (remoteStream) => handleMobileStream(remoteStream));
   });
 
-  // 6) Optional: local WebSocket ONLY in local dev (keep yours here if you want)
-  let ws: WebSocket | null = null;
- const wsUrl = import.meta.env.VITE_RELAY_WS_URL;
+  // --- Relay WebSocket (Host) ---
+  const wsUrlRaw = import.meta.env.VITE_SIGNAL_URL as string | undefined;
+  const wsUrlLocal = import.meta.env.VITE_SIGNAL_URL_LOCAL as string | undefined;
+  const isLocalHost =
+    window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const wsUrl = (isLocalHost ? wsUrlLocal : wsUrlRaw) || wsUrlRaw;
+  if (wsUrl) {
+    try {
+      ws = new WebSocket(wsUrl);
+      streamingSocketRef.current = ws;
 
-if (wsUrl) {
-  try {
-    ws = new WebSocket(wsUrl);
-    streamingSocketRef.current = ws;
+      ws.onopen = () => {
+        ws?.send(
+          JSON.stringify({
+            type: "join",
+            role: "host",
+            sessionId: roomId,
+            token: import.meta.env.VITE_RELAY_TOKEN,
+          })
+        );
+      };
 
-    ws.onopen = () => {
-      ws?.send(JSON.stringify({
-        type: "join",
-        role: "host",
-        sessionId: roomId,
-        token: import.meta.env.VITE_RELAY_TOKEN // optional
-      }));
-    };
+      ws.onclose = (ev) => {
+        console.log("[Relay] close", { code: ev.code, reason: ev.reason });
+      };
 
-    ws.onerror = () => {
-      setStatusMsg({ type: "error", text: "Relay connection failed" });
-    };
-  } catch {}
-}
+      ws.onerror = () => {
+        setStatusMsg({ type: "error", text: "Relay connection failed" });
+      };
+    } catch {}
+  }
 
-
-  // ✅ ONLY ONE cleanup return (at the very end)
+  // --- Cleanup ---
   return () => {
     if (keepAliveRef.current) {
       window.clearInterval(keepAliveRef.current);
       keepAliveRef.current = null;
     }
+    if (cloudDisconnectTimerRef.current) {
+      window.clearTimeout(cloudDisconnectTimerRef.current);
+      cloudDisconnectTimerRef.current = null;
+    }
+    if (cloudSyncTimerRef.current) {
+      window.clearInterval(cloudSyncTimerRef.current);
+      cloudSyncTimerRef.current = null;
+    }
 
-    try { peerRef.current?.destroy(); } catch {}
-    peerRef.current = null;
+    // Destroy only if this effect owns the current peer id
+    const p: any = peerRef.current;
+    if (p && p.id === myPeerId) {
+      try { p.destroy(); } catch {}
+      peerRef.current = null;
+    }
 
+    try { ws?.close(); } catch {}
     try { streamingSocketRef.current?.close(); } catch {}
     streamingSocketRef.current = null;
+
+    window.removeEventListener("beforeunload", handleBeforeUnload);
+    if (retryTimer) window.clearTimeout(retryTimer);
   };
 }, [roomId]);
 
@@ -455,7 +600,7 @@ if (wsUrl) {
 
           
           if (existingLayerIndex >= 0) {
-              const newLayers = [...prev];
+              const newLayers = [...safePrev];
               newLayers[existingLayerIndex] = {
                   ...newLayers[existingLayerIndex],
                   src: stream                   
@@ -471,9 +616,10 @@ if (wsUrl) {
                 visible: true,
                 x: 50, y: 50, width: 480, height: 270,
                 src: stream,
-                zIndex: prev.length + 10,
+                zIndex: safePrev.length + 10,
                 style: { circular: false, border: true, borderColor: '#7c3aed' }
              };
+             mobileCamLayerIdRef.current = newLayer.id;
              // --- Incoming mobile video resolution verifier (host-side) ---
 try {
   const vt = stream.getVideoTracks?.()?.[0];
@@ -495,6 +641,7 @@ try {
     vt.addEventListener?.("mute", updateRes as any);
   }
 } catch {}           
+             return [...safePrev, newLayer];
           }          
        });
        
@@ -557,7 +704,7 @@ try {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { deviceId: { exact: videoDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: { deviceId: { exact: audioDeviceId } }
+        audio: audioDeviceId ? { deviceId: { exact: audioDeviceId } } : false
       });
       
       const newLayer: Layer = {

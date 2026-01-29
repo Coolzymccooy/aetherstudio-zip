@@ -16,26 +16,11 @@ import {
   X,
 } from "lucide-react";
 import Peer, { DataConnection, MediaConnection } from "peerjs";
-
-// --- Runtime config (Vercel/Render friendly) ---
-const VITE_PEER_HOST = (import.meta as any).env?.VITE_PEER_HOST as string | undefined;
-const VITE_PEER_PATH = ((import.meta as any).env?.VITE_PEER_PATH as string | undefined) || '/peerjs';
-const VITE_PEER_PORT = Number(((import.meta as any).env?.VITE_PEER_PORT as string | undefined) || 443);
-
-function buildPeerOptions() {
-  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  if (VITE_PEER_HOST) {
-    return {
-      host: VITE_PEER_HOST,
-      port: isLocalhost ? Number(((import.meta as any).env?.VITE_PEER_PORT as any) || 9000) : VITE_PEER_PORT,
-      secure: !isLocalhost,
-      path: VITE_PEER_PATH,
-    } as const;
-  }
-  return {} as const;
-}
+import { getPeerEnv } from "../../src/utils/peerEnv";
 import { User } from "firebase/auth";
 import { getCleanPeerId } from "../../utils/peerId";
+
+
 
 const getQueryParam = (param: string) => {
   const urlParams = new URLSearchParams(window.location.search);
@@ -80,6 +65,9 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   const mediaConnRef = useRef<MediaConnection | null>(null);
   const wakeLockRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const relayWsRef = useRef<WebSocket | null>(null);
+  const cloudDisconnectTimerRef = useRef<number | null>(null);
+  const cameraStartingRef = useRef(false);
 
   const hostCheckTimerRef = useRef<number | null>(null);
   const hostCheckAttemptRef = useRef(0);
@@ -151,8 +139,11 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   }, [selectedAudioId]);
 
   // --- Camera engine (stability-focused) ---
-  const initCamera = useCallback(async (): Promise<MediaStream | null> => {
+  const initCamera = useCallback(async (force = false): Promise<MediaStream | null> => {
     try {
+      if (cameraStartingRef.current) return streamRef.current;
+      if (!force && streamRef.current && isCameraReady && !isInterrupted) return streamRef.current;
+      cameraStartingRef.current = true;
       // always “settle” UI first
       setIsCameraReady(false);
       setIsInterrupted(false);
@@ -235,14 +226,16 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
       setIsInterrupted(false);
       addLog(`Cam Error: ${e?.name || "unknown"} - ${e?.message || ""}`);
       return null;
+    } finally {
+      cameraStartingRef.current = false;
     }
-  }, [addLog, audioDevices, camQuality, facingMode, isMuted, loadAudioDevices, selectedAudioId, stopAllMedia]);
+  }, [addLog, camQuality, facingMode, isMuted, isCameraReady, isInterrupted, loadAudioDevices, selectedAudioId, stopAllMedia]);
 
   // wake lock + initial camera
   useEffect(() => {
     if (isSetupMode) return;
 
-    initCamera();
+    if (!isCameraReady) initCamera();
 
     (navigator as any).wakeLock
       ?.request("screen")
@@ -265,7 +258,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   useEffect(() => {
     if (isSetupMode) return;
     if (isBroadcasting) return;
-    initCamera();
+    initCamera(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camQuality]);
 
@@ -273,7 +266,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   useEffect(() => {
     if (isSetupMode) return;
     if (isBroadcasting) return;
-    initCamera();
+    initCamera(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [facingMode]);
 
@@ -328,55 +321,105 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   );
 
   // --- PeerJS Cloud Connection ---
-  useEffect(() => {
-    if (isSetupMode || !roomId) return;
-
-    // cleanup previous peer
-    try {
-      peerRef.current?.destroy();
-    } catch {}
-    peerRef.current = null;
-
-    stopHostChecker();
-    setIsCloudReady(false);
-    setHostFound(false);
-
-    const myId = `${getCleanPeerId(roomId, "client")}-${Math.floor(Math.random() * 1000)}`;
-    const hostId = getCleanPeerId(roomId, "host");
-
-    addLog(`ID: ${roomId} -> Cloud...`);
-
-    const peer = new Peer(myId, { debug: 1, host: "aetherstudio-zip-1.onrender.com",
-  port: 443,
-  secure: true,
-  path: "/peerjs", });
-    peerRef.current = peer;
-
-    peer.on("open", () => {
-      setIsCloudReady(true);
-      addLog("Cloud Connected");
-      startHostChecker(peer, hostId);
-    });
-
-    peer.on("error", (err: any) => {
-      addLog(`Cloud Err: ${err?.type || "error"}`);
+useEffect(() => {
+  if (isSetupMode || !roomId) return;
+  const scheduleCloudOffline = () => {
+    if (cloudDisconnectTimerRef.current) window.clearTimeout(cloudDisconnectTimerRef.current);
+    cloudDisconnectTimerRef.current = window.setTimeout(() => {
       setIsCloudReady(false);
       setHostFound(false);
+      addLog("Cloud disconnected. Reconnecting...");
+    }, 1500);
+  };
+  const clearCloudOffline = () => {
+    if (cloudDisconnectTimerRef.current) {
+      window.clearTimeout(cloudDisconnectTimerRef.current);
+      cloudDisconnectTimerRef.current = null;
+    }
+  };
 
-      // keep trying to find host if cloud blips
-      const p = peerRef.current;
-      if (p && !p.destroyed) {
-        startHostChecker(p, hostId);
-      }
-    });
+  stopHostChecker();
+  setIsCloudReady(false);
+  setHostFound(false);
 
-    return () => {
-      stopHostChecker();
-      try {
-        peer.destroy();
-      } catch {}
-    };
-  }, [addLog, isSetupMode, roomId, startHostChecker, stopHostChecker]);
+  const hostId = getCleanPeerId(roomId, "host");
+  const myId = `${getCleanPeerId(roomId, "client")}-${Math.floor(Math.random() * 1000)}`;
+
+  addLog(`ID: ${roomId} -> Cloud...`);
+
+  // ✅ Guard: if we already have a live peer, keep it (prevents WS churn / "closed before established")
+  const existing: any = peerRef.current;
+  if (existing && !existing.destroyed) {
+    // ensure we’re actively checking for the host
+    startHostChecker(existing, hostId);
+    setIsCloudReady(true);
+    return;
+  }
+
+  // Cleanup any previous peer only if it exists but is unusable
+  if (existing) {
+    try { existing.destroy(); } catch {}
+    peerRef.current = null;
+  }
+
+  const peerEnv = getPeerEnv();
+  console.log("PEER ENV RESOLVED:", peerEnv);
+
+  const peer = new Peer(myId, {
+    debug: 1,
+    host: peerEnv.host,
+    port: peerEnv.port,
+    path: peerEnv.path,
+    secure: peerEnv.secure,
+  });
+
+  peerRef.current = peer;
+
+  peer.on("open", () => {
+    clearCloudOffline();
+    setIsCloudReady(true);
+    startHostChecker(peer, hostId);
+  });
+
+  peer.on("disconnected", () => {
+    // don't destroy; allow peerjs reconnect logic
+    scheduleCloudOffline();
+    try { (peer as any).reconnect?.(); } catch {}
+  });
+
+  peer.on("close", () => {
+    clearCloudOffline();
+    setIsCloudReady(false);
+    setHostFound(false);
+    addLog("Cloud closed");
+  });
+
+  peer.on("error", (err: any) => {
+    addLog(`Cloud Err: ${err?.type || "error"}`);
+    scheduleCloudOffline();
+
+    // keep trying to find host if cloud blips
+    const p: any = peerRef.current;
+    if (p && !p.destroyed) {
+      startHostChecker(p, hostId);
+    }
+  });
+
+  return () => {
+    stopHostChecker();
+    if (cloudDisconnectTimerRef.current) {
+      window.clearTimeout(cloudDisconnectTimerRef.current);
+      cloudDisconnectTimerRef.current = null;
+    }
+
+    // Only destroy if THIS effect created the current peer instance
+    const p: any = peerRef.current;
+    if (p === peer) {
+      try { peer.destroy(); } catch {}
+      peerRef.current = null;
+    }
+  };
+}, [addLog, isSetupMode, roomId, startHostChecker, stopHostChecker]);
 
   // --- Broadcast ---
   const startBroadcast = useCallback(async () => {
@@ -462,6 +505,59 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
       addLog("Call Failed");
     }
   }, [addLog, initCamera, isCameraReady, roomId]);
+
+  // --- Relay WebSocket (Mobile) ---
+useEffect(() => {
+  if (isSetupMode || !roomId) return;
+
+  const wsUrlRaw = import.meta.env.VITE_SIGNAL_URL as string | undefined;
+  const wsUrlLocal = import.meta.env.VITE_SIGNAL_URL_LOCAL as string | undefined;
+  const isLocalHost =
+    window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const wsUrl = (isLocalHost ? wsUrlLocal : wsUrlRaw) || wsUrlRaw;
+  if (!wsUrl) return;
+  const useRelay = String(import.meta.env.VITE_USE_RELAY_FOR_MOBILE || "").toLowerCase() === "true";
+  if (!useRelay) return;
+
+  // close any previous relay socket
+  try { relayWsRef.current?.close(); } catch {}
+  relayWsRef.current = null;
+
+  let ws: WebSocket | null = null;
+
+  try {
+    ws = new WebSocket(wsUrl);
+    relayWsRef.current = ws;
+
+    ws.onopen = () => {
+      addLog("Relay connected");
+      ws?.send(JSON.stringify({
+        type: "join",
+        role: "client",
+        sessionId: roomId,
+        token: import.meta.env.VITE_RELAY_TOKEN, // optional
+      }));
+    };
+
+    ws.onmessage = (e) => {
+      // optional: addLog(`Relay msg: ${String(e.data).slice(0, 80)}`);
+    };
+
+    ws.onerror = () => addLog("Relay connection failed");
+    ws.onclose = () => addLog("Relay disconnected");
+  } catch {
+    addLog("Relay failed to start");
+  }
+
+  return () => {
+    try { ws?.close(); } catch {}
+    ws = null;
+
+    try { relayWsRef.current?.close(); } catch {}
+    relayWsRef.current = null;
+  };
+}, [isSetupMode, roomId, addLog]);
+
 
   // --- Interruption handling ---
   useEffect(() => {
@@ -700,6 +796,15 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
             >
               <Radio size={20} /> START BROADCAST
             </button>
+
+            {!isCameraReady && (
+              <button
+                onClick={() => initCamera()}
+                className="w-full mt-3 bg-white/10 text-white text-sm py-2 rounded-xl"
+              >
+                Retry Camera
+              </button>
+            )}
 
             <div className="pt-2 text-center opacity-40">
               <p className="text-[8px] font-mono tracking-widest uppercase">Tech by Tiwaton</p>

@@ -31,6 +31,7 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
       
       if (video.length > 0) setSelectedVideo(video[0].deviceId);
       if (audio.length > 0) setSelectedAudio(audio[0].deviceId);
+      if (audio.length === 0) setSelectedAudio("");
       
     } catch (err) {
       console.error("Error loading devices", err);
@@ -106,6 +107,7 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
                 onChange={(e) => setSelectedAudio(e.target.value)}
                 className="w-full bg-aether-800 border border-aether-700 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-aether-500"
               >
+                <option value="">No Microphone</option>
                 {audioDevices.map(device => (
                   <option key={device.deviceId} value={device.deviceId}>
                     {device.label || `Microphone ${device.deviceId.slice(0,5)}...`}

@@ -1,29 +1,52 @@
-// server.js (CommonJS)
+// aether-peer/server.js (CommonJS)
 const http = require("http");
 const express = require("express");
 const cors = require("cors");
 const { ExpressPeerServer } = require("peer");
 
 const app = express();
-app.use(cors());
 
 const PORT = Number(process.env.PORT || 9000);
 const PEER_PATH = process.env.PEER_PATH || "/peerjs";
 
-app.get("/health", (_, res) => res.status(200).json({ ok: true, peerPath: PEER_PATH }));
+// CORS (LAN/dev)
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  })
+);
+
+// Health
+app.get("/health", (_, res) =>
+  res.status(200).json({
+    ok: true,
+    service: "aether-peer",
+    peerPath: PEER_PATH,
+    uptimeSec: Math.round(process.uptime()),
+    ts: new Date().toISOString(),
+  })
+);
 
 const server = http.createServer(app);
 
-// IMPORTANT: path MUST be "/" when you mount at PEER_PATH
+/**
+ * ✅ Stable config:
+ * - Peer server internally serves under /peerjs (PEER_PATH)
+ * - Mount once at "/" so /peerjs/id exists for sure
+ * - proxied=false for LAN
+ */
 const peerServer = ExpressPeerServer(server, {
-  path: "/",                // <- not "/peerjs"
+  path: PEER_PATH,         // ✅ internal peer path
   allow_discovery: true,
-  proxied: true,
+  proxied: false,          // ✅ LAN/local
   debug: true,
 });
 
-app.use(PEER_PATH, peerServer);
+// ✅ Mount once at root
+app.use("/", peerServer);
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`[peer] listening on ${PORT} mount=${PEER_PATH} internal=/`);
+  console.log(`[aether-peer] listening on :${PORT}`);
+  console.log(`[aether-peer] internal peer path=${PEER_PATH} (mounted at /)`);
 });

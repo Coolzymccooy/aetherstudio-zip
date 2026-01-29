@@ -10,6 +10,7 @@ export default function App() {
   const [view, setView] = useState<'landing' | 'studio' | 'mobile'>('landing');
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [rehydrated, setRehydrated] = useState(false);
 
   // 1. Handle URL Parameters & Deep Linking immediately
   useEffect(() => {
@@ -27,12 +28,14 @@ export default function App() {
         if (roomId) localStorage.setItem('aether_target_room', roomId);
         if (signalUrl) localStorage.setItem('aether_signal_url', signalUrl);
         localStorage.setItem('aether_mode', 'companion');
+        localStorage.setItem('aether_last_view', 'mobile');
         
         setView('mobile');
       }
     };
 
     handleDeepLinks();
+    setRehydrated(true);
   }, []);
 
   // 2. Handle Authentication State
@@ -52,14 +55,24 @@ export default function App() {
         
         if (savedMode === 'companion') {
             setView('mobile');
+            localStorage.setItem('aether_last_view', 'mobile');
         } else if (view === 'landing') {
-            // Optional: for now we let them click "Enter Studio" to be explicit
+            const last = localStorage.getItem('aether_last_view');
+            if (last === 'studio') {
+              setView('studio');
+            }
+        }
+      } else {
+        const last = localStorage.getItem('aether_last_view');
+        const devBypass = localStorage.getItem('aether_dev_bypass') === 'true';
+        if (rehydrated && last === 'studio' && devBypass) {
+          handleDevBypass();
         }
       }
     });
 
     return () => unsubscribe();
-  }, [view]);
+  }, [rehydrated, view]);
 
   // Dev Bypass Handler
   const handleDevBypass = () => {
@@ -92,6 +105,8 @@ export default function App() {
       
       setUser(mockUser);
       setView('studio');
+      localStorage.setItem('aether_last_view', 'studio');
+      localStorage.setItem('aether_dev_bypass', 'true');
   };
 
   if (loading) {
@@ -118,14 +133,14 @@ export default function App() {
        setView('landing');
        return null;
     }
-    return <Studio user={user} onBack={() => { setUser(null); setView('landing'); }} />;
+    return <Studio user={user} onBack={() => { setUser(null); setView('landing'); localStorage.removeItem('aether_last_view'); }} />;
   }
 
   return (
     <LandingPage 
       user={user}
-      onEnterStudio={() => setView('studio')}
-      onOpenMobileMode={() => setView('mobile')}
+      onEnterStudio={() => { setView('studio'); localStorage.setItem('aether_last_view', 'studio'); }}
+      onOpenMobileMode={() => { setView('mobile'); localStorage.setItem('aether_last_view', 'mobile'); }}
       onDevBypass={handleDevBypass}
     />
   );

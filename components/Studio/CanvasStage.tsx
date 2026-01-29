@@ -16,6 +16,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
   onUpdateLayer,
   onCanvasReady 
 }) => {
+  const safeLayers = Array.isArray(layers) ? layers : [];
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number | null>(null);
   const hiddenContainerRef = useRef<HTMLDivElement>(null);
@@ -41,7 +42,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     if (!container) return;
 
     // 1. Identify active video layers
-    const activeVideoLayers = layers.filter(l => 
+    const activeVideoLayers = safeLayers.filter(l => 
         (l.type === SourceType.CAMERA || l.type === SourceType.SCREEN) && l.src instanceof MediaStream
     );
     const activeIds = new Set(activeVideoLayers.map(l => l.id));
@@ -133,7 +134,7 @@ video.addEventListener("canplay", () => setTimeout(reportSize, 0));
         }
     });
 
-  }, [layers]);
+  }, [safeLayers]);
 
 
   // --- Interaction Handlers ---
@@ -149,7 +150,7 @@ video.addEventListener("canplay", () => setTimeout(reportSize, 0));
     const clickY = (e.clientY - rect.top) * scaleY;
 
     // Check collision in reverse z-order (top first)
-    const clickedLayer = [...layers].sort((a, b) => b.zIndex - a.zIndex).find(layer => {
+    const clickedLayer = [...safeLayers].sort((a, b) => b.zIndex - a.zIndex).find(layer => {
         if (!layer.visible) return false;
         const width = layer.width * (layer.style.scale || 1);
         const height = layer.height * (layer.style.scale || 1);
@@ -205,12 +206,13 @@ video.addEventListener("canplay", () => setTimeout(reportSize, 0));
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // 2. Sort layers by zIndex
-    const sortedLayers = [...layers].sort((a, b) => a.zIndex - b.zIndex);
+    const sortedLayers = [...safeLayers].sort((a, b) => a.zIndex - b.zIndex);
 
     sortedLayers.forEach(layer => {
       if (!layer.visible) return;
 
-      const scale = layer.style.scale || 1;
+      const style = layer.style || {};
+      const scale = style.scale || 1;
       const width = layer.width * scale;
       const height = layer.height * scale;
 
@@ -218,18 +220,18 @@ video.addEventListener("canplay", () => setTimeout(reportSize, 0));
       
       // -- Clipping / Rounded Corners --
       ctx.beginPath();
-      if (layer.style.circular) {
+      if (style.circular) {
         ctx.arc(layer.x + width / 2, layer.y + height / 2, Math.min(width, height) / 2, 0, Math.PI * 2);
         ctx.closePath();
         ctx.clip();
-      } else if (layer.style.rounded) {
-        ctx.roundRect(layer.x, layer.y, width, height, layer.style.rounded);
+      } else if (style.rounded) {
+        ctx.roundRect(layer.x, layer.y, width, height, style.rounded);
         ctx.clip();
       }
 
       // -- Filter Effects --
-      if (layer.style.filter) {
-        ctx.filter = layer.style.filter;
+      if (style.filter) {
+        ctx.filter = style.filter;
       }
 
       // -- Draw Content --
@@ -261,11 +263,11 @@ video.addEventListener("canplay", () => setTimeout(reportSize, 0));
         }
       } else if (layer.type === SourceType.TEXT) {
         // --- TEXT STYLING LOGIC ---
-        const baseSize = layer.style.fontSize || 48;
+        const baseSize = style.fontSize || 48;
         const finalSize = baseSize * scale;
-        const family = layer.style.fontFamily || 'Inter';
-        const weight = layer.style.fontWeight || 'normal';
-        const color = layer.style.color || '#ffffff';
+        const family = style.fontFamily || 'Inter';
+        const weight = style.fontWeight || 'normal';
+        const color = style.color || '#ffffff';
         
         ctx.font = `${weight} ${finalSize}px "${family}"`;
         ctx.fillStyle = color;
@@ -274,13 +276,13 @@ video.addEventListener("canplay", () => setTimeout(reportSize, 0));
         
         const content = layer.content || '';
 
-        if (layer.style.scrolling) {
+        if (style.scrolling) {
           // --- SCROLLING TEXT LOGIC ---
           ctx.beginPath();
           ctx.rect(layer.x, layer.y, width, height);
           ctx.clip();
 
-          const speed = layer.style.scrollSpeed || 2;
+          const speed = style.scrollSpeed || 2;
           let offset = scrollOffsetsRef.current.get(layer.id) || 0;
           
           offset += speed;
@@ -314,14 +316,14 @@ video.addEventListener("canplay", () => setTimeout(reportSize, 0));
         ctx.strokeStyle = '#d946ef'; 
         ctx.lineWidth = 2;
         
-        if (layer.style.circular) {
+        if (style.circular) {
              ctx.beginPath();
              ctx.arc(layer.x + width / 2, layer.y + height / 2, Math.min(width, height) / 2, 0, Math.PI * 2);
              ctx.stroke();
         } else {
-             if (layer.style.rounded) {
+             if (style.rounded) {
                  ctx.beginPath();
-                 ctx.roundRect(layer.x, layer.y, width, height, layer.style.rounded);
+                 ctx.roundRect(layer.x, layer.y, width, height, style.rounded);
                  ctx.stroke();
              } else {
                  ctx.strokeRect(layer.x, layer.y, width, height);
@@ -339,7 +341,7 @@ video.addEventListener("canplay", () => setTimeout(reportSize, 0));
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [layers, selectedLayerId, isDragging, dragOffset]);
+  }, [safeLayers, selectedLayerId, isDragging, dragOffset]);
 
   return (
     <div className="w-full h-full flex items-center justify-center bg-[#05010a] relative shadow-2xl overflow-hidden select-none">

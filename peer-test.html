@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>PeerJS Test</title>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  </head>
+  <body>
+    <h1>PeerJS Test</h1>
+    <pre id="log"></pre>
+
+    <script>
+      const log = (msg) => {
+        document.getElementById("log").textContent += msg + "\n";
+      };
+
+      const peer = new Peer(undefined, {
+        host: "localhost",
+        port: 9000,
+        path: "/peerjs",
+        secure: false,
+      });
+
+      peer.on("open", id => {
+        log("✅ OPEN: " + id);
+      });
+
+      peer.on("error", err => {
+        log("❌ ERROR: " + err.type);
+        console.error(err);
+      });
+    </script>
+  </body>
+</html>

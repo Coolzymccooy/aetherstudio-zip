@@ -1,72 +1,63 @@
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+const getAiBaseUrl = () => {
+  const isLocal =
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1");
 
-const getClient = () => {
-  // Always use process.env.API_KEY directly as per @google/genai guidelines
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const rawLocal = (import.meta.env.VITE_AI_BASE_URL_LOCAL as string | undefined) || "";
+  const rawPublic = (import.meta.env.VITE_AI_BASE_URL as string | undefined) || "";
+  const raw = (isLocal ? rawLocal : rawPublic) || rawPublic;
+
+  if (raw) return raw.replace(/\/+$/, "");
+
+  const signal = (import.meta.env.VITE_SIGNAL_URL as string | undefined) || "";
+  if (!signal) return "";
+  const httpish = signal.replace(/^ws(s)?:\/\//i, "http$1://");
+  return httpish.replace(/\/+$/, "");
 };
 
 export const ensureImageGenApiKey = async (): Promise<boolean> => {
-  const win = window as any;
-  if (win.aistudio) {
-    try {
-      const hasKey = await win.aistudio.hasSelectedApiKey();
-      if (!hasKey) {
-          await win.aistudio.openSelectKey();
-          // Assume success to avoid race condition where hasSelectedApiKey() might not update immediately
-          return true;
-      }
-      return true;
-    } catch (e) {
-      console.error("Key selection failed", e);
-      return false;
-    }
-  }
-  return true; // Fallback if not running in the specific environment
+  // Keys must stay on the server; client always returns true.
+  return true;
 };
 
 export const generateStudioBackground = async (prompt: string): Promise<string | null> => {
-  const ai = getClient();
-  
-  try {
-    const response: GenerateContentResponse = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
-      contents: {
-        parts: [{ text: `A professional, high-quality digital streaming background, cinematic lighting, ${prompt}` }],
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: "16:9",
-          imageSize: "1K"
-        }
-      }
-    });
+  const base = getAiBaseUrl();
+  if (!base) throw new Error("AI base URL not configured");
 
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData) {
-        return `data:image/png;base64,${part.inlineData.data}`;
-      }
-    }
-    return null;
-  } catch (error) {
-    console.error("Gemini Image Gen Error:", error);
-    throw error;
+  const res = await fetch(`${base}/ai/image`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `AI image error (${res.status})`);
   }
+
+  const json = await res.json();
+  return json?.image || null;
 };
 
 export const askStudioAssistant = async (query: string): Promise<string> => {
-  const ai = getClient();
+  const base = getAiBaseUrl();
+  if (!base) return "AI base URL not configured.";
 
   try {
-    const response: GenerateContentResponse = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: query,
-      config: {
-        systemInstruction: "You are Aether, an expert AI broadcast engineer. Help the user with technical streaming advice, script ideas, or chat engagement tips. Keep answers concise and actionable.",
-      }
+    const res = await fetch(`${base}/ai/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
     });
-    return response.text || "I couldn't generate a response.";
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return text || "Error connecting to AI services. Please check your network.";
+    }
+    const json = await res.json();
+    return json?.text || "I couldn't generate a response.";
   } catch (error) {
-    console.error("Gemini Chat Error:", error);
+    console.error("AI Chat Error:", error);
     return "Error connecting to AI services. Please check your network.";
   }
 };
