@@ -93,6 +93,8 @@ export const Studio: React.FC<StudioProps> = ({ user, onBack }) => {
   
   const [cloudConnected, setCloudConnected] = useState(false);
   const [desktopConnected, setDesktopConnected] = useState(false);
+  const [relayConnected, setRelayConnected] = useState(false);
+  const [relayStatus, setRelayStatus] = useState<string | null>(null);
   type ConnStatus =
   | "idle"
   | "connecting"
@@ -530,17 +532,24 @@ useEffect(() => {
   });
 
   // --- Relay WebSocket (Host) ---
-  const wsUrlRaw = import.meta.env.VITE_SIGNAL_URL as string | undefined;
+  const wsUrlRaw =
+    (import.meta.env.VITE_SIGNAL_URL as string | undefined) ||
+    (import.meta.env.VITE_RELAY_WS_URL as string | undefined);
   const wsUrlLocal = import.meta.env.VITE_SIGNAL_URL_LOCAL as string | undefined;
   const isLocalHost =
     window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
   const wsUrl = (isLocalHost ? wsUrlLocal : wsUrlRaw) || wsUrlRaw;
-  if (wsUrl) {
+  let relayRetryTimer: number | null = null;
+
+  const connectRelay = () => {
+    if (!wsUrl) return;
     try {
       ws = new WebSocket(wsUrl);
       streamingSocketRef.current = ws;
 
       ws.onopen = () => {
+        setRelayConnected(true);
+        setRelayStatus("Relay connected");
         ws?.send(
           JSON.stringify({
             type: "join",
@@ -553,13 +562,38 @@ useEffect(() => {
 
       ws.onclose = (ev) => {
         console.log("[Relay] close", { code: ev.code, reason: ev.reason });
+        setRelayConnected(false);
+        setRelayStatus(`Relay closed (${ev.code})`);
+        if (streamStatus === StreamStatus.LIVE) {
+          try { mediaRecorderRef.current?.stop(); } catch {}
+          setStreamStatus(StreamStatus.IDLE);
+        }
+        if (relayRetryTimer) window.clearTimeout(relayRetryTimer);
+        relayRetryTimer = window.setTimeout(connectRelay, 1500);
       };
 
       ws.onerror = () => {
+        setRelayConnected(false);
+        setRelayStatus("Relay error");
         setStatusMsg({ type: "error", text: "Relay connection failed" });
       };
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(String(ev.data || "{}"));
+          if (msg?.type === "started") setRelayStatus("Relay streaming");
+          if (msg?.type === "ffmpeg_start") setRelayStatus(`FFmpeg start (${msg.target || "primary"})`);
+          if (msg?.type === "rtmp_fallback") setRelayStatus("Primary failed, using RTMP fallback");
+          if (msg?.type === "ffmpeg_closed") setRelayStatus(`FFmpeg closed (${msg.code})`);
+          if (msg?.type === "ffmpeg_restarting") setRelayStatus("FFmpeg restarting...");
+          if (msg?.type === "ffmpeg_error") setRelayStatus(`FFmpeg: ${msg.message || "error"}`);
+          if (msg?.type === "error") setRelayStatus(`Relay error: ${msg.error || "unknown"}`);
+        } catch {}
+      };
     } catch {}
-  }
+  };
+
+  connectRelay();
 
   // --- Cleanup ---
   return () => {
@@ -586,6 +620,7 @@ useEffect(() => {
     try { ws?.close(); } catch {}
     try { streamingSocketRef.current?.close(); } catch {}
     streamingSocketRef.current = null;
+    if (relayRetryTimer) window.clearTimeout(relayRetryTimer);
 
     window.removeEventListener("beforeunload", handleBeforeUnload);
     if (retryTimer) window.clearTimeout(retryTimer);
@@ -893,10 +928,16 @@ try {
         setStatusMsg({ type: 'error', text: "Cloud Disconnected!" });
         return;
       }
-      if (!streamKey) {
+      const cleanKey = streamKey.trim();
+      if (!cleanKey) {
           setStatusMsg({ type: 'error', text: "No Stream Key Set! Check Settings." });
           setShowSettings(true);
           return;
+      }
+
+      if (!relayConnected) {
+        setStatusMsg({ type: 'error', text: "Relay Offline. Wait for relay to connect." });
+        return;
       }
 
       const combinedStream = getMixedStream();
@@ -911,7 +952,7 @@ try {
       if (streamingSocketRef.current && streamingSocketRef.current.readyState === WebSocket.OPEN) {
           streamingSocketRef.current.send(JSON.stringify({ 
               type: 'start-stream', 
-               streamKey,
+               streamKey: cleanKey,
                token: import.meta.env.VITE_RELAY_TOKEN             
           }));
       } else {
@@ -923,8 +964,8 @@ try {
      // Use a stable, widely-supported input format for FFmpeg
 const preferred = 'video/webm;codecs=vp8,opus';
 const options = MediaRecorder.isTypeSupported(preferred)
-  ? { mimeType: preferred }
-  : { mimeType: 'video/webm' };
+  ? { mimeType: preferred, videoBitsPerSecond: 6_000_000, audioBitsPerSecond: 160_000 }
+  : { mimeType: 'video/webm', videoBitsPerSecond: 6_000_000, audioBitsPerSecond: 160_000 };
 
 const recorder = new MediaRecorder(combinedStream, options);
 
@@ -956,6 +997,9 @@ const recorder = new MediaRecorder(combinedStream, options);
      signOut(auth).catch(console.error);
      onBack();
   };
+
+  const canStartLive = cloudConnected && relayConnected && streamKey.trim().length > 0;
+  const canToggleLive = streamStatus === StreamStatus.LIVE || canStartLive;
 
   return (
     <div className="fixed inset-0 flex flex-col w-full bg-aether-900 text-gray-200 font-sans selection:bg-aether-500 selection:text-white relative overflow-hidden">
@@ -1040,6 +1084,15 @@ const recorder = new MediaRecorder(combinedStream, options);
            <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase border ${cloudConnected ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
                 <Cloud size={10} /> {cloudConnected ? 'Online' : 'Offline'}
            </div>
+
+           <div
+             className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase border ${
+               relayConnected ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'
+             }`}
+             title={relayStatus || undefined}
+           >
+             <Network size={10} /> {relayConnected ? 'Relay' : 'Relay Offline'}
+           </div>
         </div>
         <div className="flex gap-3">
           <button 
@@ -1060,7 +1113,18 @@ const recorder = new MediaRecorder(combinedStream, options);
             {isRecording ? 'Stop Rec' : 'Record'}
           </button>
 
-          <button onClick={toggleLive} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${streamStatus === StreamStatus.LIVE ? 'bg-red-600 text-white' : 'bg-aether-800 border border-aether-700 hover:bg-aether-700'}`}>
+          <button
+            onClick={toggleLive}
+            disabled={!canToggleLive}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+              streamStatus === StreamStatus.LIVE
+                ? 'bg-red-600 text-white'
+                : canToggleLive
+                  ? 'bg-aether-800 border border-aether-700 hover:bg-aether-700'
+                  : 'bg-aether-900 border border-aether-800 text-gray-500 cursor-not-allowed opacity-70'
+            }`}
+            title={!canToggleLive ? "Relay and stream key required" : undefined}
+          >
             <Radio size={18} /> {streamStatus === StreamStatus.LIVE ? 'End Stream' : 'Go Live'}
           </button>
           <button onClick={() => setShowSettings(true)} className="p-2 text-gray-400 hover:text-white hover:bg-aether-800 rounded-lg"><Settings size={20} /></button>
@@ -1109,6 +1173,8 @@ const recorder = new MediaRecorder(combinedStream, options);
                       <p>PeerID: <span className="font-mono text-gray-500">{peerId || 'Generating...'}</span></p>
                       <p>Room: <span className="font-mono text-gray-500">{roomId}</span></p>
                       <p>Status: <span className={cloudConnected ? "text-green-400" : "text-red-400"}>{cloudConnected ? "Active" : "Disconnected"}</span></p>
+                      <p>Relay: <span className={relayConnected ? "text-green-400" : "text-red-400"}>{relayConnected ? "Online" : "Offline"}</span></p>
+                      {relayStatus && <p>Relay Status: <span className="text-gray-400">{relayStatus}</span></p>}
                   </div>
               </div>
               <div className="bg-aether-800/50 p-4 rounded-lg">

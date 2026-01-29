@@ -2,15 +2,23 @@
 const http = require("http");
 const { WebSocketServer } = require("ws");
 const { spawn } = require("child_process");
+const fs = require("fs");
+const path = require("path");
 const url = require("url");
 const { GoogleGenAI } = require("@google/genai");
 
 const PORT = Number(process.env.PORT || 8080);
 const RELAY_TOKEN = process.env.RELAY_TOKEN || ""; // optional
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const DEFAULT_FFMPEG = path.join(__dirname, "..", "tools", "ffmpeg", "ffmpeg-8.0.1-essentials_build", "bin", "ffmpeg.exe");
+const FFMPEG_PATH = process.env.FFMPEG_PATH || DEFAULT_FFMPEG;
+const RELAY_LOG_PATH = process.env.RELAY_LOG_PATH || path.join(__dirname, "..", "tools", "relay-ffmpeg.log");
 
-function buildRtmpUrl(streamKey) {
-  return `rtmps://a.rtmps.youtube.com:443/live2/${streamKey}`;
+const RTMP_URL_PRIMARY = process.env.RTMP_URL_PRIMARY || "rtmps://a.rtmp.youtube.com/live2";
+const RTMP_URL_FALLBACK = process.env.RTMP_URL_FALLBACK || process.env.RTMP_URL || "rtmp://a.rtmp.youtube.com/live2";
+
+function buildRtmpUrl(base, streamKey) {
+  return `${base.replace(/\/$/, "")}/${streamKey}`;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -140,6 +148,12 @@ wss.on("connection", (ws, req) => {
 
   let ffmpeg = null;
   let streaming = false;
+  let wantStreaming = false;
+  let lastStreamKey = "";
+  let restartTimer = null;
+  let rtmpTarget = "primary";
+  let lastFfmpegStartMs = 0;
+  let lastErrSentMs = 0;
   let authed = RELAY_TOKEN ? false : true;
 
   // Keepalive ping -> helps proxies/mobile networks
@@ -155,6 +169,7 @@ wss.on("connection", (ws, req) => {
     try { ffmpeg.kill("SIGINT"); } catch {}
     ffmpeg = null;
     streaming = false;
+    wantStreaming = false;
     try {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "stopped", reason }));
     } catch {}
@@ -207,11 +222,22 @@ wss.on("connection", (ws, req) => {
             return;
           }
 
-          const rtmpUrl = buildRtmpUrl(msg.streamKey);
+          wantStreaming = true;
+          lastStreamKey = String(msg.streamKey || "").trim();
+          rtmpTarget = "primary";
 
-          ffmpeg = spawn(
-            "ffmpeg",
-            [
+          const ffmpegBin = fs.existsSync(FFMPEG_PATH) ? FFMPEG_PATH : "ffmpeg";
+          const spawnFfmpeg = () => {
+            if (restartTimer) {
+              clearTimeout(restartTimer);
+              restartTimer = null;
+            }
+            const base = rtmpTarget === "primary" ? RTMP_URL_PRIMARY : RTMP_URL_FALLBACK;
+            const rtmp = buildRtmpUrl(base, lastStreamKey);
+            lastFfmpegStartMs = Date.now();
+            ffmpeg = spawn(
+              ffmpegBin,
+              [
               "-loglevel", "warning",
               "-i", "pipe:0",
 
@@ -222,32 +248,56 @@ wss.on("connection", (ws, req) => {
               "-r", "30",
               "-g", "60",
               "-keyint_min", "60",
-              "-b:v", "4500k",
-              "-maxrate", "4500k",
-              "-bufsize", "9000k",
+              "-b:v", "6000k",
+              "-maxrate", "6000k",
+              "-bufsize", "12000k",
 
               "-c:a", "aac",
               "-b:a", "160k",
               "-ar", "44100",
 
               "-f", "flv",
-              rtmpUrl,
-            ],
-            { stdio: ["pipe", "ignore", "pipe"] }
-          );
+              rtmp,
+              ],
+              { stdio: ["pipe", "ignore", "pipe"] }
+            );
 
-          streaming = true;
+            streaming = true;
+            try { ws.send(JSON.stringify({ type: "ffmpeg_start", target: rtmpTarget, rtmp })); } catch {}
 
-          ffmpeg.stderr.on("data", () => {
-            // keep quiet; uncomment if needed
-            // console.log("[ffmpeg]", chunk.toString());
-          });
+            const logStream = fs.createWriteStream(RELAY_LOG_PATH, { flags: "a" });
+            logStream.write(`\n[${new Date().toISOString()}] ffmpeg start -> ${rtmp}\n`);
+            ffmpeg.stderr.on("data", (chunk) => {
+              const line = chunk.toString();
+              try {
+                logStream.write(line);
+              } catch {}
 
-          ffmpeg.on("close", (code) => {
-            streaming = false;
-            ffmpeg = null;
-            try { ws.send(JSON.stringify({ type: "ffmpeg_closed", code })); } catch {}
-          });
+              const now = Date.now();
+              if (now - lastErrSentMs > 1000 && /error|failed|invalid|timed out|refused/i.test(line)) {
+                lastErrSentMs = now;
+                try { ws.send(JSON.stringify({ type: "ffmpeg_error", message: line.trim().slice(0, 220) })); } catch {}
+              }
+            });
+
+            ffmpeg.on("close", (code) => {
+              streaming = false;
+              ffmpeg = null;
+              try { logStream.end(); } catch {}
+              try { ws.send(JSON.stringify({ type: "ffmpeg_closed", code, target: rtmpTarget })); } catch {}
+              if (wantStreaming && lastStreamKey && ws.readyState === ws.OPEN) {
+                const diedQuick = Date.now() - lastFfmpegStartMs < 8000;
+                if (rtmpTarget === "primary" && diedQuick) {
+                  rtmpTarget = "fallback";
+                  try { ws.send(JSON.stringify({ type: "rtmp_fallback", target: rtmpTarget })); } catch {}
+                }
+                restartTimer = setTimeout(spawnFfmpeg, 1500);
+                try { ws.send(JSON.stringify({ type: "ffmpeg_restarting" })); } catch {}
+              }
+            });
+          };
+
+          spawnFfmpeg();
 
           ws.send(JSON.stringify({ type: "started" }));
           return;
@@ -284,4 +334,3 @@ wss.on("connection", (ws, req) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => console.log(`[relay] listening on :${PORT}`));
-
