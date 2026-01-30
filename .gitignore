@@ -60,6 +60,10 @@ $RECYCLE.BIN/
 *.swp
 *.pid
 *.tsbuildinfo
+tools/ffmpeg/
+tools/ffmpeg.zip
+tools/cloudflared.exe
+tools/relay-ffmpeg.log
 
 # ===========================
 # PYTHON (IF YOU USE SCRIPTS)
