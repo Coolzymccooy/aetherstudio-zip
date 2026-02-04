@@ -239,23 +239,31 @@ wss.on("connection", (ws, req) => {
               ffmpegBin,
               [
               "-loglevel", "warning",
+              
+              // INPUT
+              "-f", "webm",
               "-i", "pipe:0",
 
+              // VIDEO
               "-c:v", "libx264",
-              "-preset", "veryfast",
+              "-preset", "ultrafast", // Better stability on Render
               "-tune", "zerolatency",
               "-pix_fmt", "yuv420p",
               "-r", "30",
-              "-g", "60",
+              "-g", "60", // 2s keyframe
               "-keyint_min", "60",
-              "-b:v", "6000k",
-              "-maxrate", "6000k",
-              "-bufsize", "12000k",
+              "-sc_threshold", "0",
+              "-b:v", "4500k",
+              "-maxrate", "4500k",
+              "-bufsize", "9000k",
 
+              // AUDIO
               "-c:a", "aac",
-              "-b:a", "160k",
+              "-b:a", "128k",
               "-ar", "44100",
+              "-af", "aresample=async=1", // Prevent audio timestamp drift
 
+              // OUTPUT
               "-f", "flv",
               rtmp,
               ],
