@@ -248,6 +248,8 @@ wss.on("connection", (ws, req) => {
               "-c:v", "libx264",
               "-preset", "ultrafast", // Better stability on Render
               "-tune", "zerolatency",
+              "-profile:v", "high", // YouTube Requirement
+              "-level", "4.1",      // YouTube Requirement
               "-pix_fmt", "yuv420p",
               "-r", "30",
               "-g", "60", // 2s keyframe
