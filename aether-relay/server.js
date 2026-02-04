@@ -275,25 +275,27 @@ wss.on("connection", (ws, req) => {
             streaming = true;
             try { ws.send(JSON.stringify({ type: "ffmpeg_start", target: rtmpTarget, rtmp })); } catch {}
 
-            const logStream = fs.createWriteStream(RELAY_LOG_PATH, { flags: "a" });
-            logStream.write(`\n[${new Date().toISOString()}] ffmpeg start -> ${rtmp}\n`);
+            // LOGGING: Use console instead of file for Render compatibility
+            console.log(`[relay] ffmpeg start -> ${rtmp}`);
+            
             ffmpeg.stderr.on("data", (chunk) => {
               const line = chunk.toString();
-              try {
-                logStream.write(line);
-              } catch {}
-
-              const now = Date.now();
-              if (now - lastErrSentMs > 1000 && /error|failed|invalid|timed out|refused/i.test(line)) {
-                lastErrSentMs = now;
-                try { ws.send(JSON.stringify({ type: "ffmpeg_error", message: line.trim().slice(0, 220) })); } catch {}
+              // Log only errors/warnings to console to avoid noise
+              if (/error|failed|invalid|timed out|refused/i.test(line)) {
+                 console.error(`[ffmpeg] ${line.trim()}`);
+                 
+                 const now = Date.now();
+                 if (now - lastErrSentMs > 1000) {
+                    lastErrSentMs = now;
+                    try { ws.send(JSON.stringify({ type: "ffmpeg_error", message: line.trim().slice(0, 220) })); } catch {}
+                 }
               }
             });
 
             ffmpeg.on("close", (code) => {
               streaming = false;
               ffmpeg = null;
-              try { logStream.end(); } catch {}
+              // try { logStream.end(); } catch {} // Removed file stream
               try { ws.send(JSON.stringify({ type: "ffmpeg_closed", code, target: rtmpTarget })); } catch {}
               if (wantStreaming && lastStreamKey && ws.readyState === ws.OPEN) {
                 const diedQuick = Date.now() - lastFfmpegStartMs < 8000;
