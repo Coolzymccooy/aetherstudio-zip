@@ -244,20 +244,21 @@ wss.on("connection", (ws, req) => {
               "-f", "webm",
               "-i", "pipe:0",
 
-              // VIDEO
+              // VIDEO (Optimized for Render Free Tier CPU)
               "-c:v", "libx264",
-              "-preset", "ultrafast", // Better stability on Render
+              "-preset", "ultrafast",
               "-tune", "zerolatency",
-              "-profile:v", "high", // YouTube Requirement
-              "-level", "4.1",      // YouTube Requirement
+              "-profile:v", "high",
+              "-level", "4.1",
+              "-vf", "scale=1280:720", // Downscale to 720p to save CPU
               "-pix_fmt", "yuv420p",
               "-r", "30",
-              "-g", "60", // 2s keyframe
+              "-g", "60",
               "-keyint_min", "60",
               "-sc_threshold", "0",
-              "-b:v", "4500k",
-              "-maxrate", "4500k",
-              "-bufsize", "9000k",
+              "-b:v", "2500k",         // Lower bitrate (2.5Mbps) prevents buffer starvation
+              "-maxrate", "2500k",
+              "-bufsize", "5000k",
 
               // AUDIO
               "-c:a", "aac",

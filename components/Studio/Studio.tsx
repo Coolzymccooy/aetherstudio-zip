@@ -151,6 +151,21 @@ const dataConnRef = useRef<DataConnection | null>(null);
   const cloudDisconnectTimerRef = useRef<number | null>(null);
   const cloudSyncTimerRef = useRef<number | null>(null);
 
+  // Ensure AudioContext is resumed on any interaction
+  useEffect(() => {
+    const resumeAudio = () => {
+      if (audioContext.current?.state === 'suspended') {
+        audioContext.current.resume().catch(() => {});
+      }
+    };
+    window.addEventListener('click', resumeAudio);
+    window.addEventListener('keydown', resumeAudio);
+    return () => {
+        window.removeEventListener('click', resumeAudio);
+        window.removeEventListener('keydown', resumeAudio);
+    };
+  }, []);
+
   // Update localStorage when key changes
   useEffect(() => {
       localStorage.setItem('aether_stream_key', streamKey);
