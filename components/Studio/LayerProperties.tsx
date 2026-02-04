@@ -1,6 +1,6 @@
 import React from 'react';
 import { Layer, SourceType } from '../../types';
-import { Sliders, Trash2, Circle, Square, Type, Play, Bold, Maximize, Move, RotateCcw } from 'lucide-react';
+import { Sliders, Trash2, Circle, Square, Type, Play, Bold, Maximize, Move, RotateCcw, Sparkles } from 'lucide-react';
 
 interface LayerPropertiesProps {
   layer: Layer | null;
