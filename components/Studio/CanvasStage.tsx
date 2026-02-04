@@ -61,7 +61,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     
     // Create offscreen buffer
     const osc = document.createElement('canvas');
-    osc.width = 1920; osc.height = 1080;
+    osc.width = 1280; osc.height = 720; // Match main canvas
     offscreenCanvasRef.current = osc;
   }, []);
 
@@ -408,7 +408,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       />
       <canvas 
         ref={canvasRef} 
-        width={1920} height={1080}
+        width={1280} height={720} // Optimized for 720p streaming & AI performance
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

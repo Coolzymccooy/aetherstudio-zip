@@ -34,12 +34,12 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
   };
 
   const centerLayer = () => {
-    // Center based on 1920x1080 canvas
+    // Center based on 1280x720 canvas
     const width = layer.width * (layer.style.scale || 1);
     const height = layer.height * (layer.style.scale || 1);
     onUpdate(layer.id, {
-        x: (1920 - width) / 2,
-        y: (1080 - height) / 2
+        x: (1280 - width) / 2,
+        y: (720 - height) / 2
     });
   };
 
@@ -47,8 +47,8 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
     onUpdate(layer.id, {
         x: 0,
         y: 0,
-        width: 1920,
-        height: 1080,
+        width: 1280,
+        height: 720,
         style: { ...layer.style, scale: 1 }
     });
   };
