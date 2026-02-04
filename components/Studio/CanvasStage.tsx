@@ -152,71 +152,59 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
   }, [safeLayers]);
 
-  // --- Segmentation Loop (Independent of Draw) ---
+  // --- Segmentation Loop (Throttled for Performance) ---
   useEffect(() => {
     let active = true;
+    let lastRun = 0;
+    const TARGET_FPS = 15; // Limit AI to 15fps to save CPU for encoding
+    const INTERVAL = 1000 / TARGET_FPS;
     
-    const loop = async () => {
+    const loop = async (now: number) => {
         if (!active) return;
         
-        const seg = segmenterRef.current;
-        if (!seg) {
-            requestAnimationFrame(loop);
-            return;
-        }
+        const delta = now - lastRun;
+        
+        if (delta >= INTERVAL) {
+            const seg = segmenterRef.current;
+            if (seg) {
+                // Find layers needing segmentation
+                const layersToProcess = safeLayers.filter(l => 
+                    l.visible && 
+                    l.backgroundRemoval && 
+                    videoElementsRef.current.has(l.id)
+                );
 
-        // Find layers needing segmentation
-        const layersToProcess = safeLayers.filter(l => 
-            l.visible && 
-            l.backgroundRemoval && 
-            videoElementsRef.current.has(l.id)
-        );
-
-        for (const layer of layersToProcess) {
-            const video = videoElementsRef.current.get(layer.id);
-            if (video && video.readyState >= 2 && !video.paused) {
-                try {
-                    // We hook the result via a temporary promise/callback override?
-                    // No, simpler: seg.onResults is global. We just set a "currentID" ref?
-                    // Actually, SelfieSegmentation.send() awaits the result processing.
-                    // We can reassign onResults inside the loop!
-                    
-                    await new Promise<void>(resolve => {
-                        seg.onResults((results) => {
-                            if (results.segmentationMask) {
-                                // Create a bitmap/canvas from the mask to store it
-                                // NOTE: segmentationMask is a GpuBuffer or ImageBitmap. 
-                                // We need to clone it or draw it to a canvas, otherwise it might be lost/overwritten.
-                                
-                                // Use a small offscreen canvas per layer to cache the mask
-                                const maskCache = document.createElement('canvas');
-                                maskCache.width = results.image.width;
-                                maskCache.height = results.image.height;
-                                const mCtx = maskCache.getContext('2d');
-                                if (mCtx) {
-                                    mCtx.drawImage(results.segmentationMask, 0, 0);
-                                    masksRef.current.set(layer.id, maskCache);
-                                }
-                            }
-                            resolve();
-                        });
-                        
-                        seg.send({ image: video });
-                    });
-                    
-                } catch (e) {
-                    // console.error("Seg error", e);
+                for (const layer of layersToProcess) {
+                    const video = videoElementsRef.current.get(layer.id);
+                    if (video && video.readyState >= 2 && !video.paused) {
+                        try {
+                            await new Promise<void>(resolve => {
+                                seg.onResults((results) => {
+                                    if (results.segmentationMask) {
+                                        const maskCache = document.createElement('canvas');
+                                        maskCache.width = results.image.width;
+                                        maskCache.height = results.image.height;
+                                        const mCtx = maskCache.getContext('2d');
+                                        if (mCtx) {
+                                            mCtx.drawImage(results.segmentationMask, 0, 0);
+                                            masksRef.current.set(layer.id, maskCache);
+                                        }
+                                    }
+                                    resolve();
+                                });
+                                seg.send({ image: video });
+                            });
+                        } catch (e) {}
+                    }
                 }
             }
+            lastRun = now;
         }
 
-        // Limit FPS of segmentation to save CPU (e.g. 15-20fps is enough for masks)
-        setTimeout(() => {
-            if (active) requestAnimationFrame(loop);
-        }, 50); 
+        requestAnimationFrame(loop);
     };
     
-    loop();
+    requestAnimationFrame(loop);
     return () => { active = false; };
   }, [safeLayers]);
 
