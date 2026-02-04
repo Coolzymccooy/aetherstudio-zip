@@ -8,6 +8,7 @@ interface CanvasStageProps {
   onSelectLayer: (id: string | null) => void;
   onUpdateLayer: (id: string, updates: Partial<Layer>) => void;
   onCanvasReady: (canvas: HTMLCanvasElement) => void;
+  isPro: boolean;
 }
 
 export const CanvasStage: React.FC<CanvasStageProps> = ({ 
@@ -15,7 +16,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
   selectedLayerId, 
   onSelectLayer, 
   onUpdateLayer,
-  onCanvasReady 
+  onCanvasReady,
+  isPro
 }) => {
   const safeLayers = Array.isArray(layers) ? layers : [];
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -387,6 +389,20 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
         ctx.restore();
       }
     });
+
+    // --- WATERMARK (Free Version) ---
+    if (!isPro) {
+        ctx.save();
+        const text = "AetherStudio Free";
+        ctx.font = "bold 24px Inter, sans-serif";
+        ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+        ctx.shadowColor = "rgba(0,0,0,0.8)";
+        ctx.shadowBlur = 4;
+        const metrics = ctx.measureText(text);
+        const pad = 20;
+        ctx.fillText(text, canvas.width - metrics.width - pad, canvas.height - pad);
+        ctx.restore();
+    }
 
     requestRef.current = requestAnimationFrame(draw);
   };

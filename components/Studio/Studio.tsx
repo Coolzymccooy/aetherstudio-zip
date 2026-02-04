@@ -90,8 +90,17 @@ export const Studio: React.FC<StudioProps> = ({ user, onBack }) => {
 
   // Persist Stream Key for validation workflow
   const [streamKey, setStreamKey] = useState(() => localStorage.getItem('aether_stream_key') || '');
-  
-  const [cloudConnected, setCloudConnected] = useState(false);
+  const [licenseKey, setLicenseKey] = useState(() => localStorage.getItem('aether_license_key') || '');
+  const isPro = licenseKey.startsWith('PRO_'); // Simple validation logic for MVP
+
+  // Update localStorage when key changes
+  useEffect(() => {
+      localStorage.setItem('aether_stream_key', streamKey);
+  }, [streamKey]);
+
+  useEffect(() => {
+      localStorage.setItem('aether_license_key', licenseKey);
+  }, [licenseKey]);
   const [desktopConnected, setDesktopConnected] = useState(false);
   const [relayConnected, setRelayConnected] = useState(false);
   const [relayStatus, setRelayStatus] = useState<string | null>(null);
@@ -1157,7 +1166,14 @@ const recorder = new MediaRecorder(combinedStream, options);
         </aside>
         <main className="flex-1 flex flex-col relative bg-[#05010a] overflow-hidden">
           <div className="flex-1 p-8 flex items-center justify-center">
-            <CanvasStage layers={layers} onCanvasReady={handleCanvasReady} selectedLayerId={selectedLayerId} onSelectLayer={setSelectedLayerId} onUpdateLayer={updateLayer} />
+            <CanvasStage 
+                layers={layers} 
+                onCanvasReady={handleCanvasReady} 
+                selectedLayerId={selectedLayerId} 
+                onSelectLayer={setSelectedLayerId} 
+                onUpdateLayer={updateLayer} 
+                isPro={isPro}
+            />
           </div>
           <AudioMixer
   tracks={audioTracks}
@@ -1205,6 +1221,19 @@ const recorder = new MediaRecorder(combinedStream, options);
                         <RefreshCw size={12} /> Reset Room
                     </button>
                  </div>
+              </div>
+              <div>
+                  <label className="text-gray-400 text-sm">Pro License Key</label>
+                  <input 
+                      type="text" 
+                      value={licenseKey} 
+                      onChange={e => setLicenseKey(e.target.value)} 
+                      placeholder="PRO_XXXX-XXXX..."
+                      className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    {isPro ? <span className="text-green-400">Pro Features Active ✨</span> : "Enter key to remove watermark & unlock AI."}
+                  </p>
               </div>
               <div>
                   <label className="text-gray-400 text-sm">Stream Key (YouTube/Twitch)</label>
