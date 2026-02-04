@@ -258,7 +258,7 @@ wss.on("connection", (ws, req) => {
               "-sc_threshold", "0",
               "-b:v", "2500k",         // Lower bitrate (2.5Mbps) prevents buffer starvation
               "-maxrate", "2500k",
-              "-bufsize", "5000k",
+              "-bufsize", "15000k", // Increased buffer (15Mb) to handle network jitter on weak connections
 
               // AUDIO
               "-c:a", "aac",
