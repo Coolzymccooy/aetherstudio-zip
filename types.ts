@@ -37,6 +37,7 @@ export interface Layer {
   content?: string; // For text
   zIndex: number;
   style: LayerStyle;
+  backgroundRemoval?: boolean; // New: AI Green Screen
 }
 
 export interface AudioTrackConfig {
