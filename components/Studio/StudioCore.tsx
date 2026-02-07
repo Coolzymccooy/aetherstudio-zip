@@ -704,12 +704,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       // QUALITY PRESETS
       // Slightly reduced bitrates for "Low" to ensure stability on bad connections
       const qualitySettings = {
-          high: { v: 6_000_000, a: 192_000 },
-          medium: { v: 3_000_000, a: 128_000 },
-          low: { v: 1_200_000, a: 96_000 } // Dropped from 1.5M to 1.2M for extra safety
+          high: { v: 6_000_000, a: 192_000, fps: 30 },
+          medium: { v: 2_500_000, a: 128_000, fps: 30 }, // Reduced Medium from 3M to 2.5M
+          low: { v: 1_000_000, a: 64_000, fps: 24 }      // Aggressive Low: 1Mbps, 64k audio, 24fps
       };
       
-      const { v: vBits, a: aBits } = qualitySettings[streamQuality];
+      const { v: vBits, a: aBits, fps } = qualitySettings[streamQuality];
 
       // Request a Keyframe (I-frame) every 2 seconds if possible (browser support varies)
       // This helps YouTube resync faster if packets drop.
@@ -719,11 +719,26 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         ? { mimeType: preferred, videoBitsPerSecond: vBits, audioBitsPerSecond: aBits }
         : { mimeType: 'video/webm', videoBitsPerSecond: vBits, audioBitsPerSecond: aBits };
 
-      const recorder = new MediaRecorder(combinedStream, options);
+      // Ensure canvas capture matches target FPS to reduce redundant encoding work
+      const streamToRecord = activeCanvasRef.current 
+          ? new MediaStream([
+              ...activeCanvasRef.current.captureStream(fps).getVideoTracks(),
+              ...(audioDestination.current?.stream.getAudioTracks() || [])
+            ])
+          : combinedStream;
+
+      const recorder = new MediaRecorder(streamToRecord, options);
       
       recorder.ondataavailable = (e) => {
-          if (e.data.size > 0 && streamingSocketRef.current?.readyState === WebSocket.OPEN) {
-             streamingSocketRef.current.send(e.data);
+          // BUFFER CHECK: Prevent upload saturation
+          // If the socket buffer is full (> 256KB), drop the frame to prevent indefinite lag buildup.
+          // This causes a "glitch" on YouTube but prevents the stream from drifting 30s behind real-time.
+          if (streamingSocketRef.current?.readyState === WebSocket.OPEN) {
+             if (streamingSocketRef.current.bufferedAmount > 256 * 1024) {
+                 setStatusMsg({ type: 'warn', text: "Network congestion: Dropping frames!" });
+             } else if (e.data.size > 0) {
+                 streamingSocketRef.current.send(e.data);
+             }
           }
       };
 
