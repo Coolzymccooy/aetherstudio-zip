@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { MobileStudio } from './components/Mobile/MobileStudio';
 import { LandingPage } from './components/Landing/LandingPage';
-import { Studio } from './components/Studio/Studio';
+import { StudioCore } from './components/Studio/StudioCore';
 import { auth } from './services/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { Loader2 } from 'lucide-react';
@@ -133,7 +133,7 @@ export default function App() {
        setView('landing');
        return null;
     }
-    return <Studio user={user} onBack={() => { setUser(null); setView('landing'); localStorage.removeItem('aether_last_view'); }} />;
+    return <StudioCore user={user} onBack={() => { setUser(null); setView('landing'); localStorage.removeItem('aether_last_view'); }} />;
   }
 
   return (
