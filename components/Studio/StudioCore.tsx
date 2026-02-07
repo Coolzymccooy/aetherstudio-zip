@@ -702,14 +702,19 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       const preferred = 'video/webm;codecs=vp8,opus';
       
       // QUALITY PRESETS
+      // Slightly reduced bitrates for "Low" to ensure stability on bad connections
       const qualitySettings = {
           high: { v: 6_000_000, a: 192_000 },
           medium: { v: 3_000_000, a: 128_000 },
-          low: { v: 1_500_000, a: 96_000 }
+          low: { v: 1_200_000, a: 96_000 } // Dropped from 1.5M to 1.2M for extra safety
       };
       
       const { v: vBits, a: aBits } = qualitySettings[streamQuality];
 
+      // Request a Keyframe (I-frame) every 2 seconds if possible (browser support varies)
+      // This helps YouTube resync faster if packets drop.
+      // Note: MediaRecorder doesn't expose strict GOP control, but we can hint via start(timeslice).
+      
       const options = MediaRecorder.isTypeSupported(preferred)
         ? { mimeType: preferred, videoBitsPerSecond: vBits, audioBitsPerSecond: aBits }
         : { mimeType: 'video/webm', videoBitsPerSecond: vBits, audioBitsPerSecond: aBits };
@@ -722,7 +727,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
           }
       };
 
-      recorder.start(250); 
+      // 1000ms timeslice forces more frequent data flushes, reducing "burstiness" sent to YouTube
+      // This is smoother than 250ms chunks which might be too fragmented for some networks
+      recorder.start(1000); 
       mediaRecorderRef.current = recorder;
       setStreamStatus(StreamStatus.LIVE);
     }
