@@ -51,6 +51,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [availableMics, setAvailableMics] = useState<MediaDeviceInfo[]>([]);
   const [streamKey, setStreamKey] = useState(() => localStorage.getItem('aether_stream_key') || '');
   const [licenseKey, setLicenseKey] = useState(() => localStorage.getItem('aether_license_key') || '');
+  const [streamQuality, setStreamQuality] = useState<'high' | 'medium' | 'low'>(() => (localStorage.getItem('aether_stream_quality') as any) || 'medium');
   const [desktopConnected, setDesktopConnected] = useState(false);
   const [relayConnected, setRelayConnected] = useState(false);
   const [relayStatus, setRelayStatus] = useState<string | null>(null);
@@ -699,9 +700,19 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       }
 
       const preferred = 'video/webm;codecs=vp8,opus';
+      
+      // QUALITY PRESETS
+      const qualitySettings = {
+          high: { v: 6_000_000, a: 192_000 },
+          medium: { v: 3_000_000, a: 128_000 },
+          low: { v: 1_500_000, a: 96_000 }
+      };
+      
+      const { v: vBits, a: aBits } = qualitySettings[streamQuality];
+
       const options = MediaRecorder.isTypeSupported(preferred)
-        ? { mimeType: preferred, videoBitsPerSecond: 6_000_000, audioBitsPerSecond: 160_000 }
-        : { mimeType: 'video/webm', videoBitsPerSecond: 6_000_000, audioBitsPerSecond: 160_000 };
+        ? { mimeType: preferred, videoBitsPerSecond: vBits, audioBitsPerSecond: aBits }
+        : { mimeType: 'video/webm', videoBitsPerSecond: vBits, audioBitsPerSecond: aBits };
 
       const recorder = new MediaRecorder(combinedStream, options);
       
@@ -969,6 +980,24 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
                   />
                   <p className="text-[10px] text-gray-500 mt-1">Saved locally. Requires local backend running.</p>
+              </div>
+              
+              <div>
+                  <label className="text-gray-400 text-sm">Stream Quality (Target Bitrate)</label>
+                  <select 
+                      value={streamQuality}
+                      onChange={(e) => {
+                          const val = e.target.value as any;
+                          setStreamQuality(val);
+                          localStorage.setItem('aether_stream_quality', val);
+                      }}
+                      className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                  >
+                      <option value="high">High (6 Mbps - 1080p60)</option>
+                      <option value="medium">Medium (3 Mbps - 1080p30)</option>
+                      <option value="low">Low (1.5 Mbps - 720p30)</option>
+                  </select>
+                  <p className="text-[10px] text-gray-500 mt-1">Lower this if YouTube complains about "Low Signal" or buffering.</p>
               </div>
             </div>
             <div className="flex justify-end gap-3 mt-6"><button onClick={() => setShowSettings(false)} className="px-4 py-2 rounded text-sm bg-aether-500 text-white">Done</button></div>
