@@ -63,7 +63,8 @@ $RECYCLE.BIN/
 tools/ffmpeg/
 tools/ffmpeg.zip
 tools/cloudflared.exe
-tools/relay-ffmpeg.log
+hold on, the push you did earlier has gone through and am having this in prod 
+guide me to complete the prod render and vercel config bas on previous screenshot in both environment i shared with you
 
 # ===========================
 # PYTHON (IF YOU USE SCRIPTS)

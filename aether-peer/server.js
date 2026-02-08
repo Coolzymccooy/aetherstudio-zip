@@ -48,5 +48,6 @@ app.use("/", peerServer);
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`[aether-peer] listening on :${PORT}`);
-  console.log(`[aether-peer] internal peer path=${PEER_PATH} (mounted at /)`);
+  console.log(`[aether-peer] mount=${PEER_PATH} internal=/`);
 });
+

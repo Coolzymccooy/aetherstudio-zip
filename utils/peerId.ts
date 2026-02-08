@@ -5,6 +5,8 @@ export const getCleanPeerId = (roomId: string, role: 'host' | 'client') => {
   return `aether-studio-${cleanRoom}-${role}`;
 };
 
+
+
 export const generateRoomId = () => {
   // Generate a simple 4-character code (easy to type)
   const chars = 'abcdefghjkmnpqrstuvwxyz23456789';

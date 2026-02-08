@@ -66,8 +66,6 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   const wakeLockRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const relayWsRef = useRef<WebSocket | null>(null);
-  const cloudDisconnectTimerRef = useRef<number | null>(null);
-  const cameraStartingRef = useRef(false);
 
   const hostCheckTimerRef = useRef<number | null>(null);
   const hostCheckAttemptRef = useRef(0);
@@ -139,11 +137,8 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   }, [selectedAudioId]);
 
   // --- Camera engine (stability-focused) ---
-  const initCamera = useCallback(async (force = false): Promise<MediaStream | null> => {
+  const initCamera = useCallback(async (): Promise<MediaStream | null> => {
     try {
-      if (cameraStartingRef.current) return streamRef.current;
-      if (!force && streamRef.current && isCameraReady && !isInterrupted) return streamRef.current;
-      cameraStartingRef.current = true;
       // always “settle” UI first
       setIsCameraReady(false);
       setIsInterrupted(false);
@@ -226,16 +221,14 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
       setIsInterrupted(false);
       addLog(`Cam Error: ${e?.name || "unknown"} - ${e?.message || ""}`);
       return null;
-    } finally {
-      cameraStartingRef.current = false;
     }
-  }, [addLog, camQuality, facingMode, isMuted, isCameraReady, isInterrupted, loadAudioDevices, selectedAudioId, stopAllMedia]);
+  }, [addLog, audioDevices, camQuality, facingMode, isMuted, loadAudioDevices, selectedAudioId, stopAllMedia]);
 
   // wake lock + initial camera
   useEffect(() => {
     if (isSetupMode) return;
 
-    if (!isCameraReady) initCamera();
+    initCamera();
 
     (navigator as any).wakeLock
       ?.request("screen")
@@ -258,7 +251,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   useEffect(() => {
     if (isSetupMode) return;
     if (isBroadcasting) return;
-    initCamera(true);
+    initCamera();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camQuality]);
 
@@ -266,7 +259,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   useEffect(() => {
     if (isSetupMode) return;
     if (isBroadcasting) return;
-    initCamera(true);
+    initCamera();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [facingMode]);
 
@@ -323,20 +316,6 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   // --- PeerJS Cloud Connection ---
 useEffect(() => {
   if (isSetupMode || !roomId) return;
-  const scheduleCloudOffline = () => {
-    if (cloudDisconnectTimerRef.current) window.clearTimeout(cloudDisconnectTimerRef.current);
-    cloudDisconnectTimerRef.current = window.setTimeout(() => {
-      setIsCloudReady(false);
-      setHostFound(false);
-      addLog("Cloud disconnected. Reconnecting...");
-    }, 1500);
-  };
-  const clearCloudOffline = () => {
-    if (cloudDisconnectTimerRef.current) {
-      window.clearTimeout(cloudDisconnectTimerRef.current);
-      cloudDisconnectTimerRef.current = null;
-    }
-  };
 
   stopHostChecker();
   setIsCloudReady(false);
@@ -371,24 +350,30 @@ useEffect(() => {
     port: peerEnv.port,
     path: peerEnv.path,
     secure: peerEnv.secure,
+    config: {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+    ],
+  },
   });
 
   peerRef.current = peer;
 
   peer.on("open", () => {
-    clearCloudOffline();
     setIsCloudReady(true);
     startHostChecker(peer, hostId);
   });
 
   peer.on("disconnected", () => {
-    // don't destroy; allow peerjs reconnect logic
-    scheduleCloudOffline();
+    // don’t destroy; allow peerjs reconnect logic
+    setIsCloudReady(false);
+    setHostFound(false);
+    addLog("Cloud disconnected. Reconnecting...");
     try { (peer as any).reconnect?.(); } catch {}
   });
 
   peer.on("close", () => {
-    clearCloudOffline();
     setIsCloudReady(false);
     setHostFound(false);
     addLog("Cloud closed");
@@ -396,7 +381,8 @@ useEffect(() => {
 
   peer.on("error", (err: any) => {
     addLog(`Cloud Err: ${err?.type || "error"}`);
-    scheduleCloudOffline();
+    setIsCloudReady(false);
+    setHostFound(false);
 
     // keep trying to find host if cloud blips
     const p: any = peerRef.current;
@@ -407,10 +393,6 @@ useEffect(() => {
 
   return () => {
     stopHostChecker();
-    if (cloudDisconnectTimerRef.current) {
-      window.clearTimeout(cloudDisconnectTimerRef.current);
-      cloudDisconnectTimerRef.current = null;
-    }
 
     // Only destroy if THIS effect created the current peer instance
     const p: any = peerRef.current;
@@ -510,14 +492,8 @@ useEffect(() => {
 useEffect(() => {
   if (isSetupMode || !roomId) return;
 
-  const wsUrlRaw = import.meta.env.VITE_SIGNAL_URL as string | undefined;
-  const wsUrlLocal = import.meta.env.VITE_SIGNAL_URL_LOCAL as string | undefined;
-  const isLocalHost =
-    window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-  const wsUrl = (isLocalHost ? wsUrlLocal : wsUrlRaw) || wsUrlRaw;
+  const wsUrl = import.meta.env.VITE_SIGNAL_URL as string | undefined;
   if (!wsUrl) return;
-  const useRelay = String(import.meta.env.VITE_USE_RELAY_FOR_MOBILE || "").toLowerCase() === "true";
-  if (!useRelay) return;
 
   // close any previous relay socket
   try { relayWsRef.current?.close(); } catch {}
@@ -796,15 +772,6 @@ useEffect(() => {
             >
               <Radio size={20} /> START BROADCAST
             </button>
-
-            {!isCameraReady && (
-              <button
-                onClick={() => initCamera()}
-                className="w-full mt-3 bg-white/10 text-white text-sm py-2 rounded-xl"
-              >
-                Retry Camera
-              </button>
-            )}
 
             <div className="pt-2 text-center opacity-40">
               <p className="text-[8px] font-mono tracking-widest uppercase">Tech by Tiwaton</p>
