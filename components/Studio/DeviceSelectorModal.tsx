@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Camera, Mic, X, RefreshCw, Loader2 } from 'lucide-react';
 
 interface DeviceSelectorModalProps {
-  onSelect: (videoDeviceId: string, audioDeviceId: string) => void;
+  onSelect: (videoDeviceId: string, audioDeviceId: string, videoLabel: string) => void;
   onClose: () => void;
 }
 
@@ -46,7 +46,10 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
   }, []);
 
   const handleConfirm = () => {
-    onSelect(selectedVideo, selectedAudio);
+    const label =
+      videoDevices.find((d) => d.deviceId === selectedVideo)?.label ||
+      `Camera ${selectedVideo.slice(0, 5)}...`;
+    onSelect(selectedVideo, selectedAudio, label);
   };
 
   return (

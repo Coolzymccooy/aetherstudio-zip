@@ -3,14 +3,21 @@ import { Smartphone, X, Link as LinkIcon, ExternalLink, Cloud, Globe, AlertTrian
 
 interface QRConnectModalProps {
   roomId: string;
+  sourceId: string;
+  sourceLabel?: string;
   relayPort: string; // Deprecated but kept for interface compatibility
   onClose: () => void;
 }
 
-export const QRConnectModal: React.FC<QRConnectModalProps> = ({ roomId, onClose }) => {
+export const QRConnectModal: React.FC<QRConnectModalProps> = ({ roomId, sourceId, sourceLabel, onClose }) => {
   // Initialize URL safely
   // Initialize URL safely (origin only, no route path)
 const [baseUrl, setBaseUrl] = useState('');
+const [peerMode, setPeerMode] = useState<'cloud' | 'custom'>('cloud');
+const [peerHost, setPeerHost] = useState('');
+const [peerPort, setPeerPort] = useState('');
+const [peerPath, setPeerPath] = useState('');
+const [peerSecure, setPeerSecure] = useState('');
 
 useEffect(() => {
   // 1) Allow an explicit override (best for dev)
@@ -32,6 +39,14 @@ useEffect(() => {
   if (origin && !origin.startsWith('about:') && !origin.startsWith('blob:') && !origin.startsWith('data:')) {
     setBaseUrl(origin.replace(/\/$/, ''));
   }
+}, []);
+
+useEffect(() => {
+  setPeerMode((localStorage.getItem('aether_peer_mode') as any) || 'cloud');
+  setPeerHost(localStorage.getItem('aether_peer_host') || 'localhost');
+  setPeerPort(localStorage.getItem('aether_peer_port') || '9000');
+  setPeerPath(localStorage.getItem('aether_peer_path') || '/peerjs');
+  setPeerSecure(localStorage.getItem('aether_peer_secure') || 'false');
 }, []);
 
 // Persist edits so you don't retype LAN IP every time
@@ -61,7 +76,31 @@ const getMobileUrl = () => {
     url = `${u.protocol}//${u.host}`;
   } catch {}
 
-  return `${url}/?mode=companion&room=${encodeURIComponent(roomId)}&t=${Date.now()}`;
+  const params = new URLSearchParams();
+  params.set('mode', 'companion');
+  params.set('room', roomId);
+  params.set('sourceId', sourceId);
+  if (sourceLabel) params.set('sourceLabel', sourceLabel);
+  params.set('t', String(Date.now()));
+
+  if (peerMode === 'custom') {
+    let host = peerHost.trim();
+    if (!host || host === "localhost" || host === "127.0.0.1") {
+      try {
+        const u = new URL(url);
+        host = u.hostname;
+      } catch {}
+    }
+    if (host) {
+      params.set('peerMode', 'custom');
+      params.set('peerHost', host);
+    }
+    if (peerPort) params.set('peerPort', peerPort.trim());
+    if (peerPath) params.set('peerPath', peerPath.trim());
+    if (peerSecure) params.set('peerSecure', peerSecure.trim());
+  }
+
+  return `${url}/?${params.toString()}`;
 };
 
 
@@ -83,6 +122,9 @@ const getMobileUrl = () => {
             </div>
             <h2 className="text-xl font-bold text-white">Connect Mobile Camera</h2>
             <p className="text-sm text-gray-400">Scan this code to link your phone wirelessly.</p>
+            {sourceLabel && (
+              <p className="text-xs text-gray-500 mt-1">Slot: <span className="text-gray-300 font-mono">{sourceLabel}</span></p>
+            )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -134,6 +176,22 @@ const getMobileUrl = () => {
                              <button
                                 onClick={() => {
                                     if (canShowQr) {
+                                        navigator.clipboard?.writeText(mobileUrl).catch(() => {});
+                                    }
+                                }}
+                                disabled={!canShowQr}
+                                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded border text-xs font-medium transition-colors ${
+                                    !canShowQr
+                                    ? 'bg-gray-800 text-gray-500 border-gray-700 cursor-not-allowed' 
+                                    : 'bg-aether-800 hover:bg-aether-700 text-white border-aether-600'
+                                }`}
+                             >
+                                 <Copy size={14} /> Copy Link
+                             </button>
+
+                             <button
+                                onClick={() => {
+                                    if (canShowQr) {
                                         // Open in new tab to avoid frame crashing
                                         window.open(mobileUrl, '_blank');
                                     }
@@ -174,7 +232,8 @@ const getMobileUrl = () => {
 
                  <div className="bg-aether-800/30 p-3 rounded-lg border border-aether-700/50 text-xs text-gray-400">
                     <p>
-                        <strong>Powered by PeerJS Cloud:</strong> No manual server configuration required.
+                        <strong>{peerMode === 'custom' ? 'Custom PeerJS Server:' : 'Powered by PeerJS Cloud:'}</strong>
+                        {peerMode === 'custom' ? ' Using your configured signaling server.' : ' No manual server configuration required.'}
                     </p>
                  </div>
             </div>

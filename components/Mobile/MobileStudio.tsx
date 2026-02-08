@@ -27,6 +27,8 @@ const getQueryParam = (param: string) => {
   return urlParams.get(param) || null;
 };
 
+const generateId = () => Math.random().toString(36).substr(2, 9);
+
 type CamQuality = "auto" | "4k" | "1080p" | "720p";
 
 const qualityPresets: Record<
@@ -74,6 +76,12 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   const [roomId, setRoomId] = useState<string | null>(() => {
     return getQueryParam("room") || localStorage.getItem("aether_target_room");
   });
+  const [sourceId, setSourceId] = useState<string | null>(() => {
+    return getQueryParam("sourceId") || localStorage.getItem("aether_source_id");
+  });
+  const [sourceLabel, setSourceLabel] = useState<string>(() => {
+    return getQueryParam("sourceLabel") || localStorage.getItem("aether_source_label") || "Phone Cam";
+  });
   const [manualIdInput, setManualIdInput] = useState("");
   const [isSetupMode, setIsSetupMode] = useState(!roomId);
 
@@ -95,16 +103,47 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
 
   // quality
   const [camQuality, setCamQuality] = useState<CamQuality>("auto");
+  const [batteryInfo, setBatteryInfo] = useState<{ level: number; charging: boolean } | null>(null);
 
   const addLog = useCallback((msg: string) => {
     console.log(`[Mobile] ${msg}`);
     setLogs((prev) => [msg, ...prev].slice(0, 3));
   }, []);
 
+  useEffect(() => {
+    let battery: any = null;
+    const update = () => {
+      if (!battery) return;
+      setBatteryInfo({ level: battery.level || 0, charging: !!battery.charging });
+    };
+    (navigator as any).getBattery?.().then((b: any) => {
+      battery = b;
+      update();
+      b.addEventListener("levelchange", update);
+      b.addEventListener("chargingchange", update);
+    });
+    return () => {
+      if (!battery) return;
+      battery.removeEventListener("levelchange", update);
+      battery.removeEventListener("chargingchange", update);
+    };
+  }, []);
+
   // Ensure setup mode drops if roomId arrives
   useEffect(() => {
     if (roomId) setIsSetupMode(false);
   }, [roomId]);
+
+  useEffect(() => {
+    if (roomId && !sourceId) {
+      setSourceId(generateId());
+    }
+  }, [roomId, sourceId]);
+
+  useEffect(() => {
+    if (sourceId) localStorage.setItem("aether_source_id", sourceId);
+    if (sourceLabel) localStorage.setItem("aether_source_label", sourceLabel);
+  }, [sourceId, sourceLabel]);
 
   const stopAllMedia = useCallback(() => {
     const s = streamRef.current;
@@ -432,7 +471,9 @@ useEffect(() => {
       } catch {}
       mediaConnRef.current = null;
 
-      const call = peerRef.current.call(hostId, streamRef.current);
+      const call = peerRef.current.call(hostId, streamRef.current, {
+        metadata: { sourceId, label: sourceLabel },
+      });
       mediaConnRef.current = call;
 
       // best-effort sender params
@@ -477,7 +518,7 @@ useEffect(() => {
 
       dc.on("open", () => {
         setIsBroadcasting(true);
-        dc.send({ type: "mobile-handshake" });
+        dc.send({ type: "mobile-handshake", sourceId, label: sourceLabel });
       });
 
       dc.on("error", () => {
@@ -682,6 +723,12 @@ useEffect(() => {
             >
               Room: {roomId} <Edit2 size={8} />
             </button>
+          )}
+          <div className="text-[9px] font-mono opacity-60">Source: {sourceLabel}</div>
+          {batteryInfo && (
+            <div className="text-[9px] font-mono opacity-60">
+              Battery: {Math.round(batteryInfo.level * 100)}% {batteryInfo.charging ? "⚡" : ""}
+            </div>
           )}
         </div>
 

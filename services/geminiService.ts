@@ -16,6 +16,53 @@ const getAiBaseUrl = () => {
   return httpish.replace(/\/+$/, "");
 };
 
+const fetchWithTimeout = async (
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs = 1500
+) => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(id);
+  }
+};
+
+const statusIndicatesReachable = (status: number) => {
+  return status === 401 || status === 403 || (status >= 200 && status < 300);
+};
+
+export const checkAiAvailability = async (): Promise<boolean> => {
+  const base = getAiBaseUrl();
+  if (!base) return false;
+
+  try {
+    const res = await fetchWithTimeout(`${base}/ai/health`, { method: "GET" }, 1200);
+    if (statusIndicatesReachable(res.status)) return true;
+    if (res.status !== 404 && res.status !== 405) return false;
+  } catch {
+    // fall through to chat probe
+  }
+
+  try {
+    const res = await fetchWithTimeout(
+      `${base}/ai/chat`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: "ping" }),
+      },
+      1200
+    );
+    if (statusIndicatesReachable(res.status)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+};
+
 export const ensureImageGenApiKey = async (): Promise<boolean> => {
   // Keys must stay on the server; client always returns true.
   return true;

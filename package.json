@@ -6,13 +6,17 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "peer": "node server/peer.cjs",
+    "dev:all": "concurrently -k \"vite\" \"node server/signaling.cjs\" \"node server/peer.cjs\""
   },
   "dependencies": {
     "@google/genai": "^1.33.0",
     "@mediapipe/selfie_segmentation": "^0.1.1675465747",
+    "express": "^4.19.2",
     "firebase": "^12.6.0",
     "lucide-react": "^0.561.0",
+    "peer": "1.0.2",
     "peerjs": "1.5.4",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
@@ -22,6 +26,7 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "vite-plugin-mkcert": "^1.17.9"

@@ -33,6 +33,19 @@ const SourceButton: React.FC<{ icon: React.ReactNode; label: string; onClick: ()
   </button>
 );
 
+const SourcePreview: React.FC<{ stream?: MediaStream }> = ({ stream }) => {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    if (ref.current) {
+      (ref.current as any).srcObject = stream || null;
+    }
+  }, [stream]);
+  if (!stream) {
+    return <div className="w-16 h-10 bg-black/40 rounded border border-aether-700" />;
+  }
+  return <video ref={ref} autoPlay muted playsInline className="w-16 h-10 object-cover rounded border border-aether-700" />;
+};
+
 export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   // --- STATE DECLARATIONS ---
   const [cloudConnected, setCloudConnected] = useState(false);
@@ -40,7 +53,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [audioTracks, setAudioTracks] = useState<AudioTrackConfig[]>([]);
   const [streamStatus, setStreamStatus] = useState<StreamStatus>(StreamStatus.IDLE);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
-  const [rightPanelTab, setRightPanelTab] = useState<'properties' | 'ai'>('ai');
+  const [rightPanelTab, setRightPanelTab] = useState<'properties' | 'ai' | 'inputs'>('ai');
   const [showSettings, setShowSettings] = useState(false);
   const [showDeviceSelector, setShowDeviceSelector] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
@@ -58,6 +71,83 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [peerId, setPeerId] = useState<string>('');
   const [isRecording, setIsRecording] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{type: 'error' | 'info' | 'warn', text: string} | null>(null);
+
+  type CameraSourceKind = 'local' | 'phone';
+  type CameraSourceStatus = 'pending' | 'live' | 'failed';
+  type CameraSource = {
+    id: string;
+    kind: CameraSourceKind;
+    label: string;
+    status: CameraSourceStatus;
+    layerId?: string;
+    stream?: MediaStream;
+    peerId?: string;
+    audioTrackId?: string;
+  };
+
+  const [cameraSources, setCameraSources] = useState<CameraSource[]>([]);
+  const [activePhoneSourceId, setActivePhoneSourceId] = useState<string | null>(null);
+  const [composerMode, setComposerMode] = useState(false);
+  const [autoDirectorOn, setAutoDirectorOn] = useState(() => localStorage.getItem('aether_auto_director') === 'true');
+  const [autoDirectorInterval, setAutoDirectorInterval] = useState(() => Number(localStorage.getItem('aether_auto_director_interval') || 12));
+
+  const [lowerThirdName, setLowerThirdName] = useState(() => localStorage.getItem('aether_lower_third_name') || 'Guest Name');
+  const [lowerThirdTitle, setLowerThirdTitle] = useState(() => localStorage.getItem('aether_lower_third_title') || 'Title / Role');
+  const [lowerThirdVisible, setLowerThirdVisible] = useState(false);
+
+  const [pinnedMessage, setPinnedMessage] = useState(() => localStorage.getItem('aether_pinned_message') || '');
+  const [tickerMessage, setTickerMessage] = useState(() => localStorage.getItem('aether_ticker_message') || '');
+  const [pinnedVisible, setPinnedVisible] = useState(false);
+  const [tickerVisible, setTickerVisible] = useState(false);
+
+  type StreamDestination = { id: string; label: string; url: string; enabled: boolean };
+  const [destinations, setDestinations] = useState<StreamDestination[]>(() => {
+    try {
+      const raw = localStorage.getItem('aether_stream_destinations');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  type ScenePreset = {
+    id: string;
+    name: string;
+    layout: 'freeform' | 'main_thumbs' | 'grid_2x2';
+    mainLayerId?: string | null;
+    positions: Array<{ layerId: string; x: number; y: number; width: number; height: number; zIndex: number }>;
+  };
+  const [scenePresets, setScenePresets] = useState<ScenePreset[]>(() => {
+    try {
+      const raw = localStorage.getItem('aether_scene_presets');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [presetName, setPresetName] = useState('Main + Thumbs');
+  const [layoutTemplate, setLayoutTemplate] = useState<'freeform' | 'main_thumbs' | 'grid_2x2'>('main_thumbs');
+
+  const [transitionMode, setTransitionMode] = useState<'cut' | 'fade'>(() => {
+    return (localStorage.getItem('aether_transition_mode') as any) || 'fade';
+  });
+  const [transitionMs, setTransitionMs] = useState(() => Number(localStorage.getItem('aether_transition_ms') || 300));
+  const [transitionAlpha, setTransitionAlpha] = useState(0);
+
+  const [peerMode, setPeerMode] = useState<'cloud' | 'custom'>(() => {
+     return (localStorage.getItem('aether_peer_mode') as any) || 'cloud';
+  });
+  const [peerUiMode, setPeerUiMode] = useState<'auto' | 'local' | 'advanced'>(() => {
+     return (localStorage.getItem('aether_peer_ui_mode') as any) || 'auto';
+  });
+  const [peerHost, setPeerHost] = useState(() => localStorage.getItem('aether_peer_host') || 'localhost');
+  const [peerPort, setPeerPort] = useState(() => localStorage.getItem('aether_peer_port') || '9000');
+  const [peerPath, setPeerPath] = useState(() => localStorage.getItem('aether_peer_path') || '/peerjs');
+  const [peerSecure, setPeerSecure] = useState(() => {
+     const raw = localStorage.getItem('aether_peer_secure');
+     if (raw === null) return false;
+     return raw === 'true';
+  });
   
   const [roomId, setRoomId] = useState(() => {
      const saved = localStorage.getItem('aether_host_room_id');
@@ -92,6 +182,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const peerRef = useRef<Peer | null>(null);
   const cloudDisconnectTimerRef = useRef<number | null>(null);
   const cloudSyncTimerRef = useRef<number | null>(null);
+  const mobileMetaRef = useRef<Map<string, { sourceId?: string; label?: string }>>(new Map());
+  const phonePendingTimersRef = useRef<Map<string, number>>(new Map());
+  const lowerThirdIdsRef = useRef<{ nameId?: string; titleId?: string }>({});
+  const pinnedLayerIdRef = useRef<string | null>(null);
+  const tickerLayerIdRef = useRef<string | null>(null);
+  const autoDirectorTimerRef = useRef<number | null>(null);
+  const liveIntentRef = useRef<boolean>(false);
+  const liveStartGuardRef = useRef<number>(0);
+  const transitionRafRef = useRef<number | null>(null);
 
   // --- EFFECTS ---
 
@@ -119,6 +218,34 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       localStorage.setItem('aether_license_key', licenseKey);
   }, [licenseKey]);
 
+  useEffect(() => {
+      localStorage.setItem('aether_auto_director', String(autoDirectorOn));
+      localStorage.setItem('aether_auto_director_interval', String(autoDirectorInterval || 12));
+  }, [autoDirectorOn, autoDirectorInterval]);
+
+  useEffect(() => {
+      localStorage.setItem('aether_lower_third_name', lowerThirdName);
+      localStorage.setItem('aether_lower_third_title', lowerThirdTitle);
+  }, [lowerThirdName, lowerThirdTitle]);
+
+  useEffect(() => {
+      localStorage.setItem('aether_pinned_message', pinnedMessage);
+      localStorage.setItem('aether_ticker_message', tickerMessage);
+  }, [pinnedMessage, tickerMessage]);
+
+  useEffect(() => {
+      localStorage.setItem('aether_stream_destinations', JSON.stringify(destinations));
+  }, [destinations]);
+
+  useEffect(() => {
+      localStorage.setItem('aether_scene_presets', JSON.stringify(scenePresets));
+  }, [scenePresets]);
+
+  useEffect(() => {
+      localStorage.setItem('aether_transition_mode', transitionMode);
+      localStorage.setItem('aether_transition_ms', String(transitionMs || 300));
+  }, [transitionMode, transitionMs]);
+
   // UI Tab Switching
   useEffect(() => {
     if (selectedLayerId) setRightPanelTab('properties');
@@ -131,6 +258,24 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       return () => clearTimeout(timer);
     }
   }, [statusMsg]);
+
+  useEffect(() => {
+    if (lowerThirdVisible) ensureLowerThirdLayers();
+    updateLowerThirdContent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lowerThirdName, lowerThirdTitle]);
+
+  useEffect(() => {
+    const id = pinnedLayerIdRef.current;
+    if (!id) return;
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, content: pinnedMessage } : l));
+  }, [pinnedMessage]);
+
+  useEffect(() => {
+    const id = tickerLayerIdRef.current;
+    if (!id) return;
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, content: tickerMessage } : l));
+  }, [tickerMessage]);
 
   // Video Resolution Event Listener
   useEffect(() => {
@@ -340,10 +485,41 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             }
         });
 
+        peer.on("connection", (conn) => {
+            conn.on("data", (data: any) => {
+                if (data?.type === "mobile-handshake") {
+                    mobileMetaRef.current.set(conn.peer, {
+                        sourceId: data.sourceId,
+                        label: data.label,
+                    });
+                }
+            });
+        });
+
         peer.on("call", (call) => {
             setStatusMsg({ type: "info", text: "Mobile Camera Incoming..." });
             call.answer();
-            call.on("stream", (remoteStream) => handleMobileStream(remoteStream));
+            call.on("stream", (remoteStream) => {
+                const metaFromCall: any = (call as any).metadata || {};
+                const metaFromConn = mobileMetaRef.current.get(call.peer) || {};
+                const sourceId = metaFromCall.sourceId || metaFromConn.sourceId || generateId();
+                const label = metaFromCall.label || metaFromConn.label || "Phone Cam";
+                handleMobileStream(remoteStream, sourceId, label, call.peer);
+            });
+            call.on("close", () => {
+                const metaFromConn = mobileMetaRef.current.get(call.peer) || {};
+                const sourceId = metaFromConn.sourceId;
+                if (sourceId) {
+                  setCameraSources(prev => prev.map(s => s.id === sourceId ? { ...s, status: 'failed' } : s));
+                }
+            });
+            call.on("error", () => {
+                const metaFromConn = mobileMetaRef.current.get(call.peer) || {};
+                const sourceId = metaFromConn.sourceId;
+                if (sourceId) {
+                  setCameraSources(prev => prev.map(s => s.id === sourceId ? { ...s, status: 'failed' } : s));
+                }
+            });
         });
     }
 
@@ -371,10 +547,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     let ws: WebSocket | null = null;
     let relayRetryTimer: number | null = null;
     
-    const wsUrlRaw = (import.meta.env.VITE_SIGNAL_URL as string) || (import.meta.env.VITE_RELAY_WS_URL as string);
-    const wsUrlLocal = import.meta.env.VITE_SIGNAL_URL_LOCAL as string;
-    const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-    const wsUrl = (isLocalHost ? wsUrlLocal : wsUrlRaw) || wsUrlRaw;
+    const wsUrl = getRelayWsUrl();
 
     const connectRelay = () => {
         if (!wsUrl) return;
@@ -391,11 +564,22 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                     sessionId: roomId,
                     token: import.meta.env.VITE_RELAY_TOKEN,
                 }));
+                if (liveIntentRef.current) {
+                    const now = Date.now();
+                    if (now - liveStartGuardRef.current > 1500) {
+                        liveStartGuardRef.current = now;
+                        startStreamingSession({ fromReconnect: true, forceRestart: false });
+                        setStatusMsg({ type: 'info', text: "Relay reconnected. Resuming stream..." });
+                    }
+                }
             };
 
             ws.onclose = (ev) => {
                 setRelayConnected(false);
                 setRelayStatus(`Relay closed (${ev.code})`);
+                if (liveIntentRef.current) {
+                    setStatusMsg({ type: 'warn', text: "Relay lost. Attempting to reconnect..." });
+                }
                 if (relayRetryTimer) window.clearTimeout(relayRetryTimer);
                 relayRetryTimer = window.setTimeout(connectRelay, 1500);
             };
@@ -435,40 +619,56 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
   // --- HELPER FUNCTIONS ---
 
-  const handleMobileStream = (stream: MediaStream) => {
+  const handleMobileStream = (stream: MediaStream, sourceId: string, label: string, peerId?: string) => {
+      const existingSource = cameraSources.find(s => s.id === sourceId);
+      let layerId = existingSource?.layerId;
+      const pendingTimer = phonePendingTimersRef.current.get(sourceId);
+      if (pendingTimer) {
+        window.clearTimeout(pendingTimer);
+        phonePendingTimersRef.current.delete(sourceId);
+      }
+
       setLayers(prev => {
           const safePrev = Array.isArray(prev) ? prev : [];
-          const existingIdx = safePrev.findIndex(l => l.label === 'Mobile Cam' && l.type === SourceType.CAMERA);
-          
-          if (existingIdx >= 0) {
-              const newLayers = [...safePrev];
-              newLayers[existingIdx] = { ...newLayers[existingIdx], src: stream };
-              mobileCamLayerIdRef.current = newLayers[existingIdx].id;
-              return newLayers;
-          } else {
-              const newLayer: Layer = {
-                id: generateId(),
-                type: SourceType.CAMERA,
-                label: 'Mobile Cam',
-                visible: true,
-                x: 50, y: 50, width: 480, height: 270,
-                src: stream,
-                zIndex: safePrev.length + 10,
-                style: { circular: false, border: true, borderColor: '#7c3aed' }
-             };
-             mobileCamLayerIdRef.current = newLayer.id;
-             return [...safePrev, newLayer];
-          }          
+          if (layerId) {
+              return safePrev.map(l => l.id === layerId ? { ...l, src: stream, label } : l);
+          }
+          const newLayer: Layer = {
+            id: generateId(),
+            type: SourceType.CAMERA,
+            label: label || 'Phone Cam',
+            visible: true,
+            x: 50, y: 50, width: 480, height: 270,
+            src: stream,
+            zIndex: safePrev.length + 10,
+            style: { circular: false, border: true, borderColor: '#7c3aed' }
+          };
+          layerId = newLayer.id;
+          return [...safePrev, newLayer];
        });
-       
+
+       if (layerId) {
+         mobileCamLayerIdRef.current = layerId;
+       }
+
+       setCameraSources(prev => {
+         const idx = prev.findIndex(s => s.id === sourceId);
+         if (idx >= 0) {
+           const next = [...prev];
+           next[idx] = { ...next[idx], label, status: 'live', stream, layerId, peerId };
+           return next;
+         }
+         return [...prev, { id: sourceId, kind: 'phone', label, status: 'live', stream, layerId, peerId }];
+       });
+
+       const micId = `mobile-mic-${sourceId}`;
        setAudioTracks(prev => {
-           const MOBILE_MIC_ID = 'mobile-mic-track';
-           if (prev.some(t => t.id === MOBILE_MIC_ID)) {
-               return prev.map(t => t.id === MOBILE_MIC_ID ? { ...t, stream: stream } : t);
+           if (prev.some(t => t.id === micId)) {
+               return prev.map(t => t.id === micId ? { ...t, stream: stream, label: `${label} Mic` } : t);
            }
            return [...prev, { 
-               id: MOBILE_MIC_ID, 
-               label: 'Mobile Mic', 
+               id: micId, 
+               label: `${label} Mic`, 
                volume: 100, 
                muted: false, 
                isMic: true, 
@@ -477,8 +677,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             }];
        });
 
-       setStatusMsg({ type: 'info', text: "Mobile Connected & Live!" });
+       setStatusMsg({ type: 'info', text: `${label} Connected & Live!` });
        setShowQRModal(false);
+
+       setCameraSources(prev => prev.map(s => s.id === sourceId ? { ...s, audioTrackId: micId } : s));
   };
 
   const regenerateRoomId = () => {
@@ -488,19 +690,37 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       setStatusMsg({ type: 'info', text: "New Room ID Generated." });
   };
 
-  const addCameraSource = async (videoDeviceId: string, audioDeviceId: string) => {
+  const addCameraSource = async (videoDeviceId: string, audioDeviceId: string, videoLabel: string) => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { deviceId: { exact: videoDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } },
         audio: audioDeviceId ? { deviceId: { exact: audioDeviceId } } : false
       });
       
+      const layerId = generateId();
       const newLayer: Layer = {
-        id: generateId(), type: SourceType.CAMERA, label: 'Camera', visible: true, x: 0, y: 0, width: 1920, height: 1080, src: stream, zIndex: layers.length + 1, style: {}
+        id: layerId, type: SourceType.CAMERA, label: videoLabel || 'Camera', visible: true, x: 0, y: 0, width: 1920, height: 1080, src: stream, zIndex: layers.length + 1, style: {}
       };
       setLayers(prev => [...prev, newLayer]);
-      setAudioTracks(prev => [...prev, { id: generateId(), label: 'Cam Mic', volume: 100, muted: false, isMic: true, noiseCancellation: false, stream }]);
-      setSelectedLayerId(newLayer.id);
+      let audioTrackId: string | undefined;
+      if (stream.getAudioTracks().length > 0) {
+        audioTrackId = generateId();
+        setAudioTracks(prev => [...prev, { id: audioTrackId!, label: `${videoLabel || 'Cam'} Mic`, volume: 100, muted: false, isMic: true, noiseCancellation: false, stream }]);
+      }
+      const sourceId = generateId();
+      setCameraSources(prev => [
+        ...prev,
+        {
+          id: sourceId,
+          kind: 'local',
+          label: videoLabel || `Camera ${prev.filter(s => s.kind === 'local').length + 1}`,
+          status: 'live',
+          layerId,
+          stream,
+          audioTrackId,
+        }
+      ]);
+      setSelectedLayerId(layerId);
       setShowDeviceSelector(false);
     } catch (err) {
       setStatusMsg({ type: 'error', text: "Failed to access device." });
@@ -654,99 +874,111 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     }
   };
 
+  const buildMulticastDestinations = () => {
+    const enabled = destinations.filter(d => d.enabled && d.url.trim()).map(d => d.url.trim());
+    return enabled;
+  };
+
+  const startStreamingSession = async (opts?: { fromReconnect?: boolean; forceRestart?: boolean }) => {
+    if (audioContext.current?.state === 'suspended') {
+      await audioContext.current.resume();
+    }
+
+    const cleanKey = streamKey.trim();
+    if (!cleanKey) {
+      if (!opts?.fromReconnect) {
+        setStatusMsg({ type: 'error', text: "No Stream Key Set! Check Settings." });
+        setShowSettings(true);
+      }
+      return;
+    }
+
+    if (!relayConnected && !opts?.fromReconnect) {
+      setStatusMsg({ type: 'error', text: "Relay Offline. Wait for relay to connect." });
+      return;
+    }
+
+    const combinedStream = getMixedStream();
+    if (!combinedStream) {
+      setStatusMsg({ type: 'error', text: "Initialization Error. Refresh page." });
+      return;
+    }
+
+    const destinationsList = buildMulticastDestinations();
+
+    if (streamingSocketRef.current && streamingSocketRef.current.readyState === WebSocket.OPEN) {
+      streamingSocketRef.current.send(JSON.stringify({
+        type: 'start-stream',
+        streamKey: cleanKey,
+        destinations: destinationsList,
+        token: import.meta.env.VITE_RELAY_TOKEN
+      }));
+    }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording' && !opts?.forceRestart) {
+      setStreamStatus(StreamStatus.LIVE);
+      return;
+    }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try { mediaRecorderRef.current.stop(); } catch {}
+    }
+
+    const preferred = 'video/webm;codecs=vp8,opus';
+    const qualitySettings = {
+      high: { v: 6_000_000, a: 192_000, fps: 30 },
+      medium: { v: 2_500_000, a: 128_000, fps: 30 },
+      low: { v: 1_000_000, a: 64_000, fps: 24 }
+    };
+
+    const { v: vBits, a: aBits, fps } = qualitySettings[streamQuality];
+
+    const options = MediaRecorder.isTypeSupported(preferred)
+      ? { mimeType: preferred, videoBitsPerSecond: vBits, audioBitsPerSecond: aBits }
+      : { mimeType: 'video/webm', videoBitsPerSecond: vBits, audioBitsPerSecond: aBits };
+
+    const streamToRecord = activeCanvasRef.current
+      ? new MediaStream([
+          ...activeCanvasRef.current.captureStream(fps).getVideoTracks(),
+          ...(audioDestination.current?.stream.getAudioTracks() || [])
+        ])
+      : combinedStream;
+
+    const recorder = new MediaRecorder(streamToRecord, options);
+
+    recorder.ondataavailable = (e) => {
+      if (streamingSocketRef.current?.readyState === WebSocket.OPEN) {
+        if (streamingSocketRef.current.bufferedAmount > 256 * 1024) {
+          setStatusMsg({ type: 'warn', text: "Network congestion: Dropping frames!" });
+        } else if (e.data.size > 0) {
+          streamingSocketRef.current.send(e.data);
+        }
+      }
+    };
+
+    recorder.start(1000);
+    mediaRecorderRef.current = recorder;
+    setStreamStatus(StreamStatus.LIVE);
+  };
+
   const toggleLive = async () => {
     if (streamStatus === StreamStatus.LIVE) {
+      liveIntentRef.current = false;
       if (mediaRecorderRef.current) mediaRecorderRef.current.stop();
       if (streamingSocketRef.current && streamingSocketRef.current.readyState === WebSocket.OPEN) {
           streamingSocketRef.current.send(JSON.stringify({ type: 'stop-stream' }));
       }
       setStreamStatus(StreamStatus.IDLE);
     } else {
-      if (audioContext.current?.state === 'suspended') {
-        await audioContext.current.resume();
-      }
-
+      liveIntentRef.current = true;
       if (!cloudConnected) {
-        setStatusMsg({ type: 'error', text: "Cloud Disconnected!" });
-        return;
+        const hasPhones = cameraSources.some(s => s.kind === 'phone');
+        if (hasPhones) {
+          setStatusMsg({ type: 'warn', text: "PeerJS offline — phone cameras may not connect, but you can still stream." });
+        }
       }
-      
-      const cleanKey = streamKey.trim();
-      if (!cleanKey) {
-          setStatusMsg({ type: 'error', text: "No Stream Key Set! Check Settings." });
-          setShowSettings(true);
-          return;
-      }
-
-      if (!relayConnected) {
-        setStatusMsg({ type: 'error', text: "Relay Offline. Wait for relay to connect." });
-        return;
-      }
-
-      const combinedStream = getMixedStream();
-      if (!combinedStream) {
-          setStatusMsg({ type: 'error', text: "Initialization Error. Refresh page." });
-          return;
-      }
-      
       setStatusMsg({ type: 'info', text: `Starting RTMP Stream...` });
-
-      if (streamingSocketRef.current && streamingSocketRef.current.readyState === WebSocket.OPEN) {
-          streamingSocketRef.current.send(JSON.stringify({ 
-              type: 'start-stream', 
-               streamKey: cleanKey,
-               token: import.meta.env.VITE_RELAY_TOKEN             
-          }));
-      }
-
-      const preferred = 'video/webm;codecs=vp8,opus';
-      
-      // QUALITY PRESETS
-      // Slightly reduced bitrates for "Low" to ensure stability on bad connections
-      const qualitySettings = {
-          high: { v: 6_000_000, a: 192_000, fps: 30 },
-          medium: { v: 2_500_000, a: 128_000, fps: 30 }, // Reduced Medium from 3M to 2.5M
-          low: { v: 1_000_000, a: 64_000, fps: 24 }      // Aggressive Low: 1Mbps, 64k audio, 24fps
-      };
-      
-      const { v: vBits, a: aBits, fps } = qualitySettings[streamQuality];
-
-      // Request a Keyframe (I-frame) every 2 seconds if possible (browser support varies)
-      // This helps YouTube resync faster if packets drop.
-      // Note: MediaRecorder doesn't expose strict GOP control, but we can hint via start(timeslice).
-      
-      const options = MediaRecorder.isTypeSupported(preferred)
-        ? { mimeType: preferred, videoBitsPerSecond: vBits, audioBitsPerSecond: aBits }
-        : { mimeType: 'video/webm', videoBitsPerSecond: vBits, audioBitsPerSecond: aBits };
-
-      // Ensure canvas capture matches target FPS to reduce redundant encoding work
-      const streamToRecord = activeCanvasRef.current 
-          ? new MediaStream([
-              ...activeCanvasRef.current.captureStream(fps).getVideoTracks(),
-              ...(audioDestination.current?.stream.getAudioTracks() || [])
-            ])
-          : combinedStream;
-
-      const recorder = new MediaRecorder(streamToRecord, options);
-      
-      recorder.ondataavailable = (e) => {
-          // BUFFER CHECK: Prevent upload saturation
-          // If the socket buffer is full (> 256KB), drop the frame to prevent indefinite lag buildup.
-          // This causes a "glitch" on YouTube but prevents the stream from drifting 30s behind real-time.
-          if (streamingSocketRef.current?.readyState === WebSocket.OPEN) {
-             if (streamingSocketRef.current.bufferedAmount > 256 * 1024) {
-                 setStatusMsg({ type: 'warn', text: "Network congestion: Dropping frames!" });
-             } else if (e.data.size > 0) {
-                 streamingSocketRef.current.send(e.data);
-             }
-          }
-      };
-
-      // 1000ms timeslice forces more frequent data flushes, reducing "burstiness" sent to YouTube
-      // This is smoother than 250ms chunks which might be too fragmented for some networks
-      recorder.start(1000); 
-      mediaRecorderRef.current = recorder;
-      setStreamStatus(StreamStatus.LIVE);
+      await startStreamingSession();
     }
   };
 
@@ -766,8 +998,589 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
      onBack();
   };
 
-  const canStartLive = (cloudConnected === true) && (relayConnected === true) && streamKey.trim().length > 0;
+  const canStartLive = (relayConnected === true) && streamKey.trim().length > 0;
   const canToggleLive = streamStatus === StreamStatus.LIVE || canStartLive;
+
+  const applyPeerSettings = () => {
+    localStorage.setItem('aether_peer_ui_mode', peerUiMode);
+    localStorage.setItem('aether_peer_mode', peerMode);
+    localStorage.setItem('aether_peer_host', peerHost.trim());
+    localStorage.setItem('aether_peer_port', String(Number(peerPort) || 9000));
+    localStorage.setItem('aether_peer_path', peerPath.trim() || '/peerjs');
+    localStorage.setItem('aether_peer_secure', peerSecure ? 'true' : 'false');
+    window.location.reload();
+  };
+
+  const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit, timeoutMs = 1200) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(input, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(id);
+    }
+  };
+
+  const getRelayWsUrl = () => {
+    const wsUrlRaw = (import.meta.env.VITE_SIGNAL_URL as string) || (import.meta.env.VITE_RELAY_WS_URL as string);
+    const wsUrlLocal = import.meta.env.VITE_SIGNAL_URL_LOCAL as string;
+    const currentHost = window.location.hostname;
+    const isLocalHost = currentHost === "localhost" || currentHost === "127.0.0.1";
+    let wsUrl = (isLocalHost ? wsUrlLocal : wsUrlRaw) || wsUrlRaw;
+    if (!wsUrl) return "";
+    try {
+      const u = new URL(wsUrl);
+      if (!isLocalHost && (u.hostname === "localhost" || u.hostname === "127.0.0.1")) {
+        u.hostname = currentHost;
+        wsUrl = u.toString();
+      }
+    } catch {}
+    return wsUrl.replace(/\/+$/, "");
+  };
+
+  const getRelayHttpBase = () => {
+    const wsUrl = getRelayWsUrl();
+    if (!wsUrl) return "";
+    return wsUrl.replace(/^ws(s)?:\/\//i, "http$1://").replace(/\/+$/, "");
+  };
+
+  const checkRelayHealth = async () => {
+    const base = getRelayHttpBase();
+    if (!base) {
+      setStatusMsg({ type: 'error', text: "Relay URL not configured." });
+      return;
+    }
+    try {
+      const res = await fetchWithTimeout(`${base}/health`, { method: 'GET' }, 1500);
+      if (res.ok) {
+        setStatusMsg({ type: 'info', text: "Relay OK." });
+      } else {
+        setStatusMsg({ type: 'warn', text: `Relay responded ${res.status}.` });
+      }
+    } catch {
+      setStatusMsg({ type: 'error', text: "Relay check failed. Is the server running?" });
+    }
+  };
+
+  const checkFfmpeg = async () => {
+    const base = getRelayHttpBase();
+    if (!base) {
+      setStatusMsg({ type: 'error', text: "Relay URL not configured." });
+      return;
+    }
+    try {
+      const res = await fetchWithTimeout(`${base}/ffmpeg`, { method: 'GET' }, 2000);
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setStatusMsg({ type: 'error', text: text || `FFmpeg check failed (${res.status}).` });
+        return;
+      }
+      const json: any = await res.json().catch(() => ({}));
+      setStatusMsg({ type: 'info', text: `FFmpeg OK: ${json?.version || 'available'}` });
+    } catch {
+      setStatusMsg({ type: 'error', text: "FFmpeg check failed. Is it installed on the relay server?" });
+    }
+  };
+
+  const getMobileBaseUrl = () => {
+    const forced = (import.meta as any).env?.VITE_MOBILE_BASE_URL as string | undefined;
+    if (forced && forced.trim()) return forced.trim().replace(/\/$/, '');
+    const saved = localStorage.getItem('aether_mobile_base_url');
+    if (saved) return saved.replace(/\/$/, '');
+    const origin = window.location.origin;
+    if (origin && !origin.startsWith('about:') && !origin.startsWith('blob:') && !origin.startsWith('data:')) {
+      return origin.replace(/\/$/, '');
+    }
+    return '';
+  };
+
+  const buildMobileUrl = (sourceId: string, sourceLabel?: string) => {
+    let url = getMobileBaseUrl();
+    if (!url) return '';
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = `https://${url}`;
+    }
+    try {
+      const u = new URL(url);
+      url = `${u.protocol}//${u.host}`;
+    } catch {}
+    const params = new URLSearchParams();
+    params.set('mode', 'companion');
+    params.set('room', roomId);
+    params.set('sourceId', sourceId);
+    if (sourceLabel) params.set('sourceLabel', sourceLabel);
+    params.set('t', String(Date.now()));
+    if (peerMode === 'custom') {
+      let host = peerHost.trim();
+      if (!host || host === "localhost" || host === "127.0.0.1") {
+        try {
+          const u = new URL(url);
+          host = u.hostname;
+        } catch {}
+      }
+      if (host) {
+        params.set('peerMode', 'custom');
+        params.set('peerHost', host);
+        params.set('peerPort', peerPort);
+        params.set('peerPath', peerPath);
+        params.set('peerSecure', peerSecure ? 'true' : 'false');
+      }
+    }
+    return `${url}/?${params.toString()}`;
+  };
+
+  useEffect(() => {
+    if (peerUiMode === 'auto') {
+      setPeerMode('cloud');
+      return;
+    }
+    if (peerUiMode === 'local') {
+      setPeerMode('custom');
+      setPeerHost('localhost');
+      setPeerPort('9000');
+      setPeerPath('/peerjs');
+      setPeerSecure(false);
+    }
+    if (peerUiMode === 'advanced') {
+      setPeerMode('custom');
+    }
+  }, [peerUiMode]);
+
+  const createPhoneSource = () => {
+    const id = generateId();
+    const label = `Phone Cam ${cameraSources.filter(s => s.kind === 'phone').length + 1}`;
+    const src: CameraSource = { id, kind: 'phone', label, status: 'pending' };
+    setCameraSources(prev => [...prev, src]);
+    setActivePhoneSourceId(id);
+    setShowQRModal(true);
+
+    const timer = window.setTimeout(() => {
+      setCameraSources(prev => prev.map(s => s.id === id && s.status === 'pending' ? { ...s, status: 'failed' } : s));
+    }, 30000);
+    phonePendingTimersRef.current.set(id, timer);
+  };
+
+  const openPhoneQr = (sourceId: string) => {
+    setActivePhoneSourceId(sourceId);
+    setCameraSources(prev => prev.map(s => s.id === sourceId && s.status === 'failed' ? { ...s, status: 'pending' } : s));
+    setShowQRModal(true);
+  };
+
+  const updateSourceLabel = (id: string, label: string) => {
+    setCameraSources(prev => prev.map(s => s.id === id ? { ...s, label } : s));
+  };
+
+  const removeSource = (id: string) => {
+    const src = cameraSources.find(s => s.id === id);
+    if (src?.stream) {
+      try { src.stream.getTracks().forEach(t => t.stop()); } catch {}
+    }
+    if (src?.audioTrackId) {
+      setAudioTracks(prev => prev.filter(t => t.id !== src.audioTrackId));
+    }
+    if (src?.layerId) {
+      setLayers(prev => prev.filter(l => l.id !== src.layerId));
+    }
+    if (src?.layerId && selectedLayerId === src.layerId) {
+      setSelectedLayerId(null);
+    }
+    if (src?.kind === 'phone') {
+      const micId = `mobile-mic-${id}`;
+      setAudioTracks(prev => prev.filter(t => t.id !== micId));
+    }
+    const timer = phonePendingTimersRef.current.get(id);
+    if (timer) {
+      window.clearTimeout(timer);
+      phonePendingTimersRef.current.delete(id);
+    }
+    setCameraSources(prev => prev.filter(s => s.id !== id));
+  };
+
+  const makeMain = (layerId?: string) => {
+    if (!layerId) return;
+    const action = () => {
+      setLayers(prev => {
+        const maxZ = prev.reduce((m, l) => Math.max(m, l.zIndex), 0) + 1;
+        return prev.map(l => l.id === layerId ? { ...l, x: 0, y: 0, width: 1920, height: 1080, zIndex: maxZ, visible: true } : l);
+      });
+      setSelectedLayerId(layerId);
+      if (composerMode) {
+        setTimeout(() => applyComposerLayout(layerId), 0);
+      }
+    };
+    runTransition(action);
+  };
+
+  const ensureLowerThirdLayers = () => {
+    if (lowerThirdIdsRef.current.nameId && lowerThirdIdsRef.current.titleId) return;
+    const nameId = generateId();
+    const titleId = generateId();
+    lowerThirdIdsRef.current = { nameId, titleId };
+    setLayers(prev => ([
+      ...prev,
+      {
+        id: nameId,
+        type: SourceType.TEXT,
+        label: 'Lower Third Name',
+        visible: lowerThirdVisible,
+        x: 60,
+        y: 600,
+        width: 900,
+        height: 60,
+        content: lowerThirdName,
+        zIndex: 900,
+        style: { fontSize: 44, fontFamily: 'Inter', fontWeight: 'bold', color: '#ffffff' },
+      },
+      {
+        id: titleId,
+        type: SourceType.TEXT,
+        label: 'Lower Third Title',
+        visible: lowerThirdVisible,
+        x: 60,
+        y: 652,
+        width: 900,
+        height: 40,
+        content: lowerThirdTitle,
+        zIndex: 901,
+        style: { fontSize: 26, fontFamily: 'Inter', fontWeight: 'normal', color: '#cbd5e1' },
+      }
+    ]));
+  };
+
+  const updateLowerThirdContent = () => {
+    const { nameId, titleId } = lowerThirdIdsRef.current;
+    if (!nameId || !titleId) return;
+    setLayers(prev => prev.map(l => {
+      if (l.id === nameId) return { ...l, content: lowerThirdName };
+      if (l.id === titleId) return { ...l, content: lowerThirdTitle };
+      return l;
+    }));
+  };
+
+  const setLowerThirdVisibility = (visible: boolean) => {
+    ensureLowerThirdLayers();
+    const { nameId, titleId } = lowerThirdIdsRef.current;
+    setLowerThirdVisible(visible);
+    setLayers(prev => prev.map(l => {
+      if (l.id === nameId || l.id === titleId) return { ...l, visible };
+      return l;
+    }));
+  };
+
+  const showLowerThirdTemporarily = (ms: number) => {
+    setLowerThirdVisibility(true);
+    window.setTimeout(() => setLowerThirdVisibility(false), ms);
+  };
+
+  const ensurePinnedLayer = () => {
+    if (pinnedLayerIdRef.current) return;
+    const id = generateId();
+    pinnedLayerIdRef.current = id;
+    setLayers(prev => ([
+      ...prev,
+      {
+        id,
+        type: SourceType.TEXT,
+        label: 'Pinned Comment',
+        visible: pinnedVisible,
+        x: 60,
+        y: 40,
+        width: 900,
+        height: 40,
+        content: pinnedMessage,
+        zIndex: 850,
+        style: { fontSize: 24, fontFamily: 'Inter', fontWeight: 'bold', color: '#fbbf24' },
+      }
+    ]));
+  };
+
+  const ensureTickerLayer = () => {
+    if (tickerLayerIdRef.current) return;
+    const id = generateId();
+    tickerLayerIdRef.current = id;
+    setLayers(prev => ([
+      ...prev,
+      {
+        id,
+        type: SourceType.TEXT,
+        label: 'Chat Ticker',
+        visible: tickerVisible,
+        x: 0,
+        y: 680,
+        width: 1280,
+        height: 30,
+        content: tickerMessage,
+        zIndex: 840,
+        style: { fontSize: 20, fontFamily: 'Inter', fontWeight: 'normal', color: '#a78bfa', scrolling: true, scrollSpeed: 2 },
+      }
+    ]));
+  };
+
+  const setPinnedVisibility = (visible: boolean) => {
+    ensurePinnedLayer();
+    const id = pinnedLayerIdRef.current;
+    setPinnedVisible(visible);
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, visible } : l));
+  };
+
+  const setTickerVisibility = (visible: boolean) => {
+    ensureTickerLayer();
+    const id = tickerLayerIdRef.current;
+    setTickerVisible(visible);
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, visible } : l));
+  };
+
+  const addDestination = () => {
+    setDestinations(prev => [
+      ...prev,
+      { id: generateId(), label: 'Extra Stream', url: '', enabled: true }
+    ]);
+  };
+
+  const updateDestination = (id: string, updates: Partial<StreamDestination>) => {
+    setDestinations(prev => prev.map(d => d.id === id ? { ...d, ...updates } : d));
+  };
+
+  const removeDestination = (id: string) => {
+    setDestinations(prev => prev.filter(d => d.id !== id));
+  };
+
+  const saveScenePreset = () => {
+    const positions = layers.map(l => ({
+      layerId: l.id,
+      x: l.x,
+      y: l.y,
+      width: l.width,
+      height: l.height,
+      zIndex: l.zIndex,
+    }));
+    setScenePresets(prev => [
+      ...prev,
+      {
+        id: generateId(),
+        name: presetName.trim() || `Preset ${prev.length + 1}`,
+        layout: layoutTemplate,
+        mainLayerId: selectedLayerId,
+        positions,
+      }
+    ]);
+    setStatusMsg({ type: 'info', text: 'Scene preset saved.' });
+  };
+
+  const loadScenePresetById = (id: string) => {
+    const preset = scenePresets.find(p => p.id === id);
+    if (!preset) return;
+    if (preset.layout === 'main_thumbs') {
+      setComposerMode(true);
+      setSelectedLayerId(preset.mainLayerId || selectedLayerId);
+      setTimeout(() => applyComposerLayout(preset.mainLayerId || selectedLayerId), 0);
+    } else if (preset.layout === 'grid_2x2') {
+      setComposerMode(false);
+      applyGridLayout();
+    } else {
+      setComposerMode(false);
+      setLayers(prev => prev.map(l => {
+        const pos = preset.positions.find(p => p.layerId === l.id);
+        if (!pos) return l;
+        return { ...l, x: pos.x, y: pos.y, width: pos.width, height: pos.height, zIndex: pos.zIndex };
+      }));
+    }
+    setStatusMsg({ type: 'info', text: `Loaded preset: ${preset.name}` });
+  };
+
+  const deleteScenePreset = (id: string) => {
+    setScenePresets(prev => prev.filter(p => p.id !== id));
+  };
+
+  const setSourceAudioActive = (sourceId: string) => {
+    setCameraSources(prev => prev.map(s => s.id === sourceId ? { ...s } : s));
+    setAudioTracks(prev => prev.map(t => {
+      const owner = cameraSources.find(s => s.audioTrackId === t.id);
+      if (!owner) return t;
+      if (owner.id === sourceId) return { ...t, muted: false };
+      return { ...t, muted: true };
+    }));
+  };
+
+
+  const applyComposerLayout = (mainOverride?: string | null) => {
+    const CAM_W = 1920;
+    const CAM_H = 1080;
+    const THUMB_W = 320;
+    const THUMB_H = 180;
+    const PAD = 16;
+
+    const sourcesWithLayers = cameraSources.filter(s => s.layerId);
+    if (sourcesWithLayers.length === 0) return;
+
+    const mainLayerId =
+      mainOverride ||
+      selectedLayerId ||
+      sourcesWithLayers[0].layerId;
+
+    setLayers(prev => {
+      const base = prev.map(l => ({ ...l }));
+      let thumbIdx = 0;
+      return base.map(l => {
+        const src = sourcesWithLayers.find(s => s.layerId === l.id);
+        if (!src) return l;
+
+        if (l.id === mainLayerId) {
+          return { ...l, x: 0, y: 0, width: CAM_W, height: CAM_H, zIndex: 100 };
+        }
+
+        const x = CAM_W - THUMB_W - PAD;
+        const y = PAD + thumbIdx * (THUMB_H + PAD);
+        thumbIdx += 1;
+        return { ...l, x, y, width: THUMB_W, height: THUMB_H, zIndex: 50 + thumbIdx };
+      });
+    });
+  };
+
+  useEffect(() => {
+    if (composerMode) {
+      applyComposerLayout();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composerMode, cameraSources.length, selectedLayerId]);
+
+  const cutToNext = () => {
+    if (cameraSources.length === 0) return;
+    const currentLayerId = selectedLayerId;
+    const idx = cameraSources.findIndex(s => s.layerId === currentLayerId);
+    const next = cameraSources[(idx + 1) % cameraSources.length] || cameraSources[0];
+    makeMain(next.layerId);
+  };
+
+  const emergencyWide = () => {
+    const wide =
+      cameraSources.find(s => s.kind === 'local') ||
+      cameraSources.find(s => s.kind === 'phone') ||
+      null;
+    if (wide) makeMain(wide.layerId);
+  };
+
+  const applyGridLayout = () => {
+    const targets = cameraSources.filter(s => s.layerId).map(s => s.layerId as string).slice(0, 4);
+    if (targets.length === 0) return;
+    const CAM_W = 1920;
+    const CAM_H = 1080;
+    const cols = 2;
+    const rows = 2;
+    const cellW = CAM_W / cols;
+    const cellH = CAM_H / rows;
+    setLayers(prev => prev.map(l => {
+      const idx = targets.indexOf(l.id);
+      if (idx === -1) return l;
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      return {
+        ...l,
+        x: col * cellW,
+        y: row * cellH,
+        width: cellW,
+        height: cellH,
+        zIndex: 100 + idx,
+      };
+    }));
+  };
+
+  const runTransition = (action: () => void) => {
+    if (transitionMode === 'cut' || transitionMs <= 0) {
+      action();
+      return;
+    }
+    if (transitionRafRef.current) {
+      cancelAnimationFrame(transitionRafRef.current);
+    }
+    const duration = Math.max(120, transitionMs);
+    const half = duration / 2;
+    const start = performance.now();
+    let switched = false;
+
+    const step = (now: number) => {
+      const t = now - start;
+      if (t < half) {
+        setTransitionAlpha(t / half);
+      } else {
+        if (!switched) {
+          action();
+          switched = true;
+        }
+        const down = 1 - (t - half) / half;
+        setTransitionAlpha(Math.max(0, down));
+      }
+
+      if (t < duration) {
+        transitionRafRef.current = requestAnimationFrame(step);
+      } else {
+        setTransitionAlpha(0);
+        transitionRafRef.current = null;
+      }
+    };
+
+    transitionRafRef.current = requestAnimationFrame(step);
+  };
+
+  useEffect(() => {
+    if (autoDirectorTimerRef.current) {
+      window.clearInterval(autoDirectorTimerRef.current);
+      autoDirectorTimerRef.current = null;
+    }
+    if (!autoDirectorOn || cameraSources.length < 2) return;
+    const intervalMs = Math.max(3, Number(autoDirectorInterval) || 12) * 1000;
+    autoDirectorTimerRef.current = window.setInterval(() => {
+      cutToNext();
+    }, intervalMs);
+    return () => {
+      if (autoDirectorTimerRef.current) {
+        window.clearInterval(autoDirectorTimerRef.current);
+        autoDirectorTimerRef.current = null;
+      }
+    };
+  }, [autoDirectorOn, autoDirectorInterval, cameraSources.length, cutToNext]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+      if (e.key >= "1" && e.key <= "9") {
+        const idx = Number(e.key) - 1;
+        const src = cameraSources[idx];
+        if (src?.layerId) makeMain(src.layerId);
+      }
+      if (e.key === "0") emergencyWide();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cameraSources, emergencyWide, makeMain]);
+
+  const testPeerServer = async () => {
+    const mode = peerMode;
+    if (mode === 'cloud') {
+      setStatusMsg({ type: 'info', text: 'Cloud mode selected. PeerJS cloud should be reachable.' });
+      return;
+    }
+
+    const host = (peerHost || 'localhost').trim().replace(/^https?:\/\//i, '');
+    const port = Number(peerPort) || 9000;
+    const path = (peerPath || '/peerjs').trim();
+    const protocol = peerSecure ? 'https' : 'http';
+    const base = `${protocol}://${host}:${port}`;
+    // PeerJS REST endpoint uses /<path>/peerjs/id
+    const cleanPath = path.startsWith('/') ? path : `/${path}`;
+    const idUrl = `${base}${cleanPath.replace(/\/$/, '')}/peerjs/id`;
+
+    try {
+      const res = await fetch(idUrl, { method: 'GET' });
+      if (res.ok) {
+        setStatusMsg({ type: 'info', text: `PeerJS OK: ${host}:${port}${path}` });
+      } else {
+        setStatusMsg({ type: 'warn', text: `PeerJS responded ${res.status}. Check host/port/path.` });
+      }
+    } catch (err) {
+      setStatusMsg({ type: 'error', text: 'PeerJS test failed. Is the server running and reachable?' });
+    }
+  };
 
   function createHyperGateChain(ctx: AudioContext) {
     const input = ctx.createGain();
@@ -815,7 +1628,18 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       )}
 
       {showDeviceSelector && <DeviceSelectorModal onSelect={addCameraSource} onClose={() => setShowDeviceSelector(false)} />}
-      {showQRModal && <QRConnectModal roomId={roomId} relayPort="" onClose={() => setShowQRModal(false)} />}
+      {showQRModal && activePhoneSourceId && (
+        <QRConnectModal
+          roomId={roomId}
+          sourceId={activePhoneSourceId}
+          sourceLabel={cameraSources.find(s => s.id === activePhoneSourceId)?.label || "Phone Cam"}
+          relayPort=""
+          onClose={() => {
+            setShowQRModal(false);
+            setActivePhoneSourceId(null);
+          }}
+        />
+      )}
       {showHelpModal && <HelpModal onClose={() => setShowHelpModal(false)} />}
 
       {micPickerTrackId && (
@@ -917,10 +1741,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       <div className="flex flex-1 overflow-hidden">
         <aside className="w-16 flex flex-col items-center py-6 gap-6 border-r border-aether-700 bg-aether-800/50">
            <SourceButton icon={<Camera size={24} />} label="Camera" onClick={() => setShowDeviceSelector(true)} />
-           <SourceButton icon={<Smartphone size={24} />} label="Mobile" onClick={() => setShowQRModal(true)} />
+           <SourceButton icon={<Smartphone size={24} />} label="Mobile" onClick={createPhoneSource} />
            <SourceButton icon={<Monitor size={24} />} label="Screen" onClick={addScreenSource} />
            <SourceButton icon={<ImageIcon size={24} />} label="Image" onClick={() => fileInputRef.current?.click()} />
            <SourceButton icon={<Type size={24} />} label="Text" onClick={addTextLayer} />
+           <SourceButton icon={<HelpCircle size={24} />} label="Help" onClick={() => setShowHelpModal(true)} />
         </aside>
         <main className="flex-1 flex flex-col relative bg-[#05010a] overflow-hidden">
           <div className="flex-1 p-8 flex items-center justify-center">
@@ -931,6 +1756,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                 onSelectLayer={setSelectedLayerId} 
                 onUpdateLayer={updateLayer} 
                 isPro={isPro}
+                transitionOverlay={{ alpha: transitionAlpha, color: '#000000' }}
             />
           </div>
           <AudioMixer
@@ -942,27 +1768,261 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         <div className="w-80 border-l border-aether-700 bg-aether-900 flex flex-col">
             <div className="flex border-b border-aether-700">
                 <button onClick={() => setRightPanelTab('properties')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'properties' ? 'bg-aether-800 text-white' : 'text-gray-500'}`}><Sliders size={14} /> Properties</button>
+                <button onClick={() => setRightPanelTab('inputs')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'inputs' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Camera size={14} /> Inputs</button>
                 <button onClick={() => setRightPanelTab('ai')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'ai' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Sparkles size={14} /> AI Studio</button>
             </div>
             <div className="flex-1 overflow-hidden">
-                {rightPanelTab === 'properties' ? <LayerProperties layer={layers.find(l => l.id === selectedLayerId) || null} onUpdate={updateLayer} onDelete={deleteLayer} isPro={isPro} /> : <AIPanel onAddLayer={(src) => addImageLayer(src, 'AI Background')} />}
+                {rightPanelTab === 'properties' && (
+                  <LayerProperties layer={layers.find(l => l.id === selectedLayerId) || null} onUpdate={updateLayer} onDelete={deleteLayer} isPro={isPro} />
+                )}
+                {rightPanelTab === 'ai' && (
+                  <AIPanel onAddLayer={(src) => addImageLayer(src, 'AI Background')} />
+                )}
+                {rightPanelTab === 'inputs' && (
+                  <div className="h-full overflow-y-auto p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-bold text-white">Input Manager</h3>
+                        <p className="text-[10px] text-gray-500">Local cameras and phones</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => setShowDeviceSelector(true)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Add Local</button>
+                        <button onClick={createPhoneSource} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Add Phone</button>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button onClick={cutToNext} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Cut To Next</button>
+                      <button onClick={emergencyWide} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Emergency Wide</button>
+                    </div>
+
+                    <div className="flex items-center justify-between bg-aether-800/40 border border-aether-700 rounded-lg p-2">
+                      <div>
+                        <div className="text-xs font-semibold text-white">Composer Mode</div>
+                        <div className="text-[10px] text-gray-500">Main + thumbnails layout</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button onClick={applyComposerLayout} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Apply</button>
+                        <label className="text-[10px] text-gray-300 flex items-center gap-1">
+                          <input type="checkbox" checked={composerMode} onChange={(e) => setComposerMode(e.target.checked)} />
+                          On
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="bg-aether-800/40 border border-aether-700 rounded-lg p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-xs font-semibold text-white">Auto-Director</div>
+                          <div className="text-[10px] text-gray-500">Auto switches cameras on a timer</div>
+                        </div>
+                        <label className="text-[10px] text-gray-300 flex items-center gap-1">
+                          <input type="checkbox" checked={autoDirectorOn} onChange={(e) => setAutoDirectorOn(e.target.checked)} />
+                          On
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-gray-400">Interval (sec)</span>
+                        <input
+                          type="number"
+                          value={autoDirectorInterval}
+                          onChange={(e) => setAutoDirectorInterval(Number(e.target.value) || 12)}
+                          className="w-16 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="bg-aether-800/40 border border-aether-700 rounded-lg p-3 space-y-2">
+                      <div className="text-xs font-semibold text-white">Lower Thirds</div>
+                      <input
+                        value={lowerThirdName}
+                        onChange={(e) => setLowerThirdName(e.target.value)}
+                        className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                        placeholder="Name"
+                      />
+                      <input
+                        value={lowerThirdTitle}
+                        onChange={(e) => setLowerThirdTitle(e.target.value)}
+                        className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                        placeholder="Title"
+                      />
+                      <div className="flex gap-2">
+                        <button onClick={() => setLowerThirdVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Show</button>
+                        <button onClick={() => setLowerThirdVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Hide</button>
+                        <button onClick={() => showLowerThirdTemporarily(5000)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Show 5s</button>
+                      </div>
+                    </div>
+
+                    <div className="bg-aether-800/40 border border-aether-700 rounded-lg p-3 space-y-2">
+                      <div className="text-xs font-semibold text-white">Transitions</div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={transitionMode}
+                          onChange={(e) => setTransitionMode(e.target.value as any)}
+                          className="bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                        >
+                          <option value="cut">Cut</option>
+                          <option value="fade">Fade</option>
+                        </select>
+                        <input
+                          type="number"
+                          value={transitionMs}
+                          onChange={(e) => setTransitionMs(Number(e.target.value) || 300)}
+                          className="w-16 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                        />
+                        <span className="text-[10px] text-gray-400">ms</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-aether-800/40 border border-aether-700 rounded-lg p-3 space-y-2">
+                      <div className="text-xs font-semibold text-white">Scene Presets</div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={presetName}
+                          onChange={(e) => setPresetName(e.target.value)}
+                          className="flex-1 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                          placeholder="Preset name"
+                        />
+                        <select
+                          value={layoutTemplate}
+                          onChange={(e) => setLayoutTemplate(e.target.value as any)}
+                          className="bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                        >
+                          <option value="main_thumbs">Main + Thumbs</option>
+                          <option value="grid_2x2">2x2 Grid</option>
+                          <option value="freeform">Freeform</option>
+                        </select>
+                        <button onClick={saveScenePreset} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Save</button>
+                      </div>
+                      {scenePresets.length === 0 && (
+                        <div className="text-[10px] text-gray-500">No presets yet.</div>
+                      )}
+                      {scenePresets.map(p => (
+                        <div key={p.id} className="flex items-center gap-2">
+                          <div className="flex-1 text-[10px] text-gray-300">{p.name} <span className="text-gray-500">({p.layout})</span></div>
+                          <button onClick={() => loadScenePresetById(p.id)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Load</button>
+                          <button onClick={() => deleteScenePreset(p.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Delete</button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="bg-aether-800/40 border border-aether-700 rounded-lg p-3 space-y-2">
+                      <div className="text-xs font-semibold text-white">Audience Studio</div>
+                      <input
+                        value={pinnedMessage}
+                        onChange={(e) => setPinnedMessage(e.target.value)}
+                        className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                        placeholder="Pinned message"
+                      />
+                      <div className="flex gap-2">
+                        <button onClick={() => setPinnedVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Show Pin</button>
+                        <button onClick={() => setPinnedVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Hide Pin</button>
+                      </div>
+                      <input
+                        value={tickerMessage}
+                        onChange={(e) => setTickerMessage(e.target.value)}
+                        className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                        placeholder="Ticker message"
+                      />
+                      <div className="flex gap-2">
+                        <button onClick={() => setTickerVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Start Ticker</button>
+                        <button onClick={() => setTickerVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Stop Ticker</button>
+                      </div>
+                    </div>
+
+                    {cameraSources.length === 0 && (
+                      <div className="text-xs text-gray-500 border border-aether-700 rounded p-3 bg-aether-800/40">
+                        No camera inputs yet. Add a local or phone camera.
+                      </div>
+                    )}
+
+                    {cameraSources.map(src => (
+                      <div key={src.id} className="flex items-center gap-3 bg-aether-800/50 border border-aether-700 rounded-lg p-2">
+                        <SourcePreview stream={src.stream} />
+                        <div className="flex-1">
+                          <input
+                            value={src.label}
+                            onChange={(e) => updateSourceLabel(src.id, e.target.value)}
+                            className="w-full bg-transparent text-sm text-white outline-none border-b border-transparent focus:border-aether-500"
+                          />
+                          <div className="text-[10px] text-gray-500">{src.kind === 'local' ? 'Local Camera' : 'Phone Camera'} • {src.status}</div>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <button onClick={() => makeMain(src.layerId)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Make Main</button>
+                          {src.audioTrackId && (
+                            <button onClick={() => setSourceAudioActive(src.id)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Use Audio</button>
+                          )}
+                          <button onClick={() => removeSource(src.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Remove</button>
+                        </div>
+                      </div>
+                    ))}
+
+                    <div className="pt-2">
+                      <h4 className="text-xs font-bold text-gray-300 mb-2">Phone Slots</h4>
+                      {cameraSources.filter(s => s.kind === 'phone').length === 0 && (
+                        <div className="text-[10px] text-gray-500 border border-aether-700 rounded p-2 bg-aether-800/30">
+                          No phone slots created yet.
+                        </div>
+                      )}
+                      {cameraSources.filter(s => s.kind === 'phone').map(src => (
+                        <div key={`phone-${src.id}`} className="flex items-center gap-2 border border-aether-700 rounded p-2 bg-aether-800/30 mb-2">
+                          <div className="flex-1">
+                            <div className="text-xs text-white">{src.label}</div>
+                            <div className="text-[10px] text-gray-500">Status: {src.status}</div>
+                          </div>
+                          {src.status !== 'live' && (
+                            <button onClick={() => openPhoneQr(src.id)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Show QR</button>
+                          )}
+                          <button
+                            onClick={() => {
+                              const link = buildMobileUrl(src.id, src.label);
+                              if (link) {
+                                navigator.clipboard?.writeText(link).catch(() => {});
+                              }
+                            }}
+                            className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200"
+                          >
+                            Copy Link
+                          </button>
+                          <button onClick={() => makeMain(src.layerId)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Make Main</button>
+                          <button onClick={() => removeSource(src.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Remove</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
             </div>
         </div>
       </div>
 
       {showSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-aether-900 border border-aether-700 rounded-xl p-6 w-[500px] shadow-2xl">
+          <div className="bg-aether-900 border border-aether-700 rounded-xl p-6 w-[520px] shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold flex gap-2"><Settings className="text-aether-500"/> Settings</h2><button onClick={() => setShowSettings(false)}><X className="text-gray-400"/></button></div>
             <div className="space-y-4">
               <div className="bg-blue-500/10 border border-blue-500/20 p-4 rounded-lg">
-                  <h4 className="text-sm font-bold text-white mb-2 flex items-center gap-2"><Activity size={16}/> Cloud Diagnostic</h4>
+                  <h4 className="text-sm font-bold text-white mb-2 flex items-center gap-2"><Activity size={16}/> Signaling Diagnostic</h4>
                   <div className="space-y-1 text-xs text-gray-300">
                       <p>PeerID: <span className="font-mono text-gray-500">{peerId || 'Generating...'}</span></p>
                       <p>Room: <span className="font-mono text-gray-500">{roomId}</span></p>
+                      <p>Mode: <span className="font-mono text-gray-500">{peerMode === 'custom' ? 'Custom' : 'Cloud'}</span></p>
                       <p>Status: <span className={cloudConnected ? "text-green-400" : "text-red-400"}>{cloudConnected ? "Active" : "Disconnected"}</span></p>
                       <p>Relay: <span className={relayConnected ? "text-green-400" : "text-red-400"}>{relayConnected ? "Online" : "Offline"}</span></p>
                       {relayStatus && <p>Relay Status: <span className="text-gray-400">{relayStatus}</span></p>}
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={checkRelayHealth}
+                      className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200"
+                    >
+                      Relay Check
+                    </button>
+                    <button
+                      onClick={checkFfmpeg}
+                      className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200"
+                    >
+                      FFmpeg Check
+                    </button>
                   </div>
               </div>
               <div className="bg-aether-800/50 p-4 rounded-lg">
@@ -976,6 +2036,96 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                         className="p-2 bg-red-500/10 text-red-400 hover:bg-red-500/20 rounded-lg text-xs flex items-center gap-1 border border-red-500/20"
                     >
                         <RefreshCw size={12} /> Reset Room
+                    </button>
+                 </div>
+              </div>
+
+              <div className="bg-aether-800/50 p-4 rounded-lg space-y-3">
+                 <div>
+                    <h4 className="text-sm font-bold text-white mb-1">Connection Mode</h4>
+                    <p className="text-xs text-gray-400">Simple options for non-technical setup</p>
+                 </div>
+                 <div className="text-[10px] text-gray-500 bg-aether-800/40 border border-aether-700 rounded p-2">
+                   <strong>Auto:</strong> Easiest. Uses PeerJS cloud.
+                   <br />
+                   <strong>Local:</strong> Uses your computer at <span className="font-mono">localhost:9000</span>.
+                   <br />
+                   <strong>Advanced:</strong> Use a custom server or VPS.
+                 </div>
+                 <select
+                    value={peerUiMode}
+                    onChange={(e) => setPeerUiMode(e.target.value as any)}
+                    className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                 >
+                    <option value="auto">Auto (Recommended)</option>
+                    <option value="local">Local (This Computer)</option>
+                    <option value="advanced">Advanced (Custom Server)</option>
+                 </select>
+                 <p className="text-[10px] text-gray-500">
+                   Local uses this computer (localhost:9000). Advanced is for remote or VPS servers.
+                 </p>
+
+                 {peerUiMode === 'advanced' && (
+                    <div className="space-y-2">
+                      <div>
+                        <label className="text-gray-400 text-sm">Host</label>
+                        <input
+                          type="text"
+                          value={peerHost}
+                          onChange={(e) => setPeerHost(e.target.value)}
+                          placeholder="localhost"
+                          className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                        />
+                        <p className="text-[10px] text-gray-500 mt-1">Example: <span className="font-mono">yourdomain.com</span></p>
+                      </div>
+                      <div>
+                        <label className="text-gray-400 text-sm">Port</label>
+                        <input
+                          type="number"
+                          value={peerPort}
+                          onChange={(e) => setPeerPort(e.target.value)}
+                          placeholder="9000"
+                          className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                        />
+                        <p className="text-[10px] text-gray-500 mt-1">Common: 443 (secure), 9000 (local)</p>
+                      </div>
+                      <div>
+                        <label className="text-gray-400 text-sm">Path</label>
+                        <input
+                          type="text"
+                          value={peerPath}
+                          onChange={(e) => setPeerPath(e.target.value)}
+                          placeholder="/peerjs"
+                          className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                        />
+                        <p className="text-[10px] text-gray-500 mt-1">Default path is <span className="font-mono">/peerjs</span></p>
+                      </div>
+                      <label className="flex items-center gap-2 text-xs text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={peerSecure}
+                          onChange={(e) => setPeerSecure(e.target.checked)}
+                        />
+                        Use TLS (wss/https)
+                      </label>
+                      <p className="text-[10px] text-gray-500">
+                        After applying, the app reloads and uses your custom PeerJS server.
+                      </p>
+                    </div>
+                 )}
+
+                 <div className="flex justify-between items-center">
+                    <button
+                      onClick={testPeerServer}
+                      className="px-3 py-2 rounded text-xs bg-aether-800 border border-aether-700 hover:bg-aether-700 text-white"
+                    >
+                      Test Connection
+                    </button>
+                    <button
+                      onClick={applyPeerSettings}
+                      className="px-3 py-2 rounded text-xs bg-aether-700 hover:bg-aether-600 text-white"
+                    >
+                      Apply & Reload
                     </button>
                  </div>
               </div>
@@ -1002,6 +2152,52 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
                   />
                   <p className="text-[10px] text-gray-500 mt-1">Saved locally. Requires local backend running.</p>
+              </div>
+
+              <div className="bg-aether-800/50 p-4 rounded-lg space-y-2">
+                  <h4 className="text-sm font-bold text-white mb-1">Multi-Stream Destinations</h4>
+                  <p className="text-[10px] text-gray-500">Add extra RTMP targets (Twitch, Facebook, etc.)</p>
+                  {destinations.length === 0 && (
+                    <div className="text-[10px] text-gray-500">No extra destinations yet.</div>
+                  )}
+                  {destinations.map(d => (
+                    <div key={d.id} className="space-y-1 border border-aether-700 rounded p-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={d.label}
+                          onChange={(e) => updateDestination(d.id, { label: e.target.value })}
+                          className="flex-1 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                          placeholder="Label"
+                        />
+                        <label className="text-[10px] text-gray-300 flex items-center gap-1">
+                          <input
+                            type="checkbox"
+                            checked={d.enabled}
+                            onChange={(e) => updateDestination(d.id, { enabled: e.target.checked })}
+                          />
+                          On
+                        </label>
+                        <button
+                          onClick={() => removeDestination(d.id)}
+                          className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <input
+                        value={d.url}
+                        onChange={(e) => updateDestination(d.id, { url: e.target.value })}
+                        className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                        placeholder="rtmp://.../your-stream-key"
+                      />
+                    </div>
+                  ))}
+                  <button
+                    onClick={addDestination}
+                    className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200"
+                  >
+                    Add Destination
+                  </button>
               </div>
               
               <div>

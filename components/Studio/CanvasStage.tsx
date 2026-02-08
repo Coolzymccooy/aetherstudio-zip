@@ -9,6 +9,7 @@ interface CanvasStageProps {
   onUpdateLayer: (id: string, updates: Partial<Layer>) => void;
   onCanvasReady: (canvas: HTMLCanvasElement) => void;
   isPro: boolean;
+  transitionOverlay?: { alpha: number; color: string };
 }
 
 export const CanvasStage: React.FC<CanvasStageProps> = ({ 
@@ -17,7 +18,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
   onSelectLayer, 
   onUpdateLayer,
   onCanvasReady,
-  isPro
+  isPro,
+  transitionOverlay
 }) => {
   const safeLayers = Array.isArray(layers) ? layers : [];
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -401,6 +403,14 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
         const metrics = ctx.measureText(text);
         const pad = 20;
         ctx.fillText(text, canvas.width - metrics.width - pad, canvas.height - pad);
+        ctx.restore();
+    }
+
+    if (transitionOverlay && transitionOverlay.alpha > 0) {
+        ctx.save();
+        ctx.globalAlpha = transitionOverlay.alpha;
+        ctx.fillStyle = transitionOverlay.color;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.restore();
     }
 
