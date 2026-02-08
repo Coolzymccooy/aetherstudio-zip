@@ -994,7 +994,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   };
 
   const handleSignOut = () => {
-     signOut(auth).catch(console.error);
+     if (auth) {
+       signOut(auth).catch(console.error);
+     }
      onBack();
   };
 

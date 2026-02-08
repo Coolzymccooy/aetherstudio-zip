@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { MobileStudio } from './components/Mobile/MobileStudio';
 import { LandingPage } from './components/Landing/LandingPage';
 import { StudioCore } from './components/Studio/StudioCore';
-import { auth } from './services/firebase';
+import { auth, hasFirebaseConfig } from './services/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { Loader2 } from 'lucide-react';
 
@@ -40,6 +40,10 @@ export default function App() {
 
   // 2. Handle Authentication State
   useEffect(() => {
+    if (!hasFirebaseConfig || !auth) {
+      setLoading(false);
+      return;
+    }
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       // If we already have a mock user, don't overwrite with null unless explicit logout
       if (!currentUser && user?.isAnonymous === false && user?.email === 'dev@local.test') {
@@ -117,6 +121,30 @@ export default function App() {
               <Loader2 className="animate-spin" />
            </div>
            <p className="text-sm text-gray-400 font-mono">Initializing Aether Secure Core...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasFirebaseConfig) {
+    return (
+      <div className="min-h-screen bg-[#0f0518] text-white flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-aether-900 border border-red-500/30 rounded-2xl p-8 shadow-2xl text-center">
+          <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+            <Loader2 className="animate-spin text-red-400" />
+          </div>
+          <h1 className="text-2xl font-bold mb-2">Missing Firebase Config</h1>
+          <p className="text-gray-400 text-sm mb-6">
+            The app needs Firebase environment variables in production.
+          </p>
+          <div className="bg-black/30 p-4 rounded-lg text-left text-xs text-gray-300 space-y-1 font-mono">
+            <div>VITE_FIREBASE_API_KEY</div>
+            <div>VITE_FIREBASE_AUTH_DOMAIN</div>
+            <div>VITE_FIREBASE_PROJECT_ID</div>
+            <div>VITE_FIREBASE_STORAGE_BUCKET</div>
+            <div>VITE_FIREBASE_MESSAGING_SENDER_ID</div>
+            <div>VITE_FIREBASE_APP_ID</div>
+          </div>
         </div>
       </div>
     );
