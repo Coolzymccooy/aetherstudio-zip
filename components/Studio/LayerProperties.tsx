@@ -1,11 +1,12 @@
 import React from 'react';
 import { Layer, SourceType } from '../../types';
-import { Sliders, Trash2, Circle, Square, Type, Play, Bold, Maximize, Move, RotateCcw } from 'lucide-react';
+import { Sliders, Trash2, Circle, Square, Type, Play, Bold, Maximize, Move, RotateCcw, Sparkles } from 'lucide-react';
 
 interface LayerPropertiesProps {
   layer: Layer | null;
   onUpdate: (id: string, updates: Partial<Layer> | { style: any }) => void;
   onDelete: (id: string) => void;
+  isPro?: boolean; // New prop
 }
 
 const FONT_OPTIONS = [
@@ -19,7 +20,7 @@ const FONT_OPTIONS = [
   { label: 'Verdana', value: 'Verdana' },
 ];
 
-export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdate, onDelete }) => {
+export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdate, onDelete, isPro = false }) => {
   if (!layer) return (
     <div className="w-80 bg-aether-900 border-l border-aether-700 p-6 flex flex-col items-center justify-center text-gray-500 text-center">
       <Sliders size={48} className="mb-4 opacity-20" />
@@ -34,12 +35,12 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
   };
 
   const centerLayer = () => {
-    // Center based on 1920x1080 canvas
+    // Center based on 1280x720 canvas
     const width = layer.width * (layer.style.scale || 1);
     const height = layer.height * (layer.style.scale || 1);
     onUpdate(layer.id, {
-        x: (1920 - width) / 2,
-        y: (1080 - height) / 2
+        x: (1280 - width) / 2,
+        y: (720 - height) / 2
     });
   };
 
@@ -47,8 +48,8 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
     onUpdate(layer.id, {
         x: 0,
         y: 0,
-        width: 1920,
-        height: 1080,
+        width: 1280,
+        height: 720,
         style: { ...layer.style, scale: 1 }
     });
   };
@@ -268,6 +269,30 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* --- AI Effects (Green Screen - PRO ONLY) --- */}
+        {layer.type === SourceType.CAMERA && (
+          <div className="space-y-3 border-t border-aether-800 pt-4">
+            <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                <Sparkles size={12} className="text-fuchsia-400" /> AI Effects
+                </label>
+                {!isPro && <span className="text-[9px] bg-aether-700 px-1.5 py-0.5 rounded text-aether-300">PRO</span>}
+            </div>
+            
+            <div className={`flex items-center justify-between bg-aether-800 p-2 rounded border ${!isPro ? 'border-aether-700/50 opacity-60 cursor-not-allowed' : 'border-aether-700'}`}>
+              <span className="text-sm text-gray-300">Remove Background</span>
+              <button 
+                disabled={!isPro}
+                onClick={() => isPro && onUpdate(layer.id, { backgroundRemoval: !layer.backgroundRemoval } as any)}
+                className={`w-10 h-5 rounded-full relative transition-colors ${layer.backgroundRemoval ? 'bg-fuchsia-500' : 'bg-gray-700'}`}
+              >
+                <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${layer.backgroundRemoval ? 'left-6' : 'left-1'}`} />
+              </button>
+            </div>
+            {!isPro && <p className="text-[10px] text-gray-500 italic">Upgrade license to unlock green screen.</p>}
           </div>
         )}
 

@@ -239,23 +239,34 @@ wss.on("connection", (ws, req) => {
               ffmpegBin,
               [
               "-loglevel", "warning",
+              
+              // INPUT
+              "-f", "webm",
               "-i", "pipe:0",
 
+              // VIDEO (Optimized for Render Free Tier CPU)
               "-c:v", "libx264",
-              "-preset", "veryfast",
+              "-preset", "ultrafast",
               "-tune", "zerolatency",
+              "-profile:v", "high",
+              "-level", "4.1",
+              "-vf", "scale=1280:720", // Downscale to 720p to save CPU
               "-pix_fmt", "yuv420p",
               "-r", "30",
               "-g", "60",
               "-keyint_min", "60",
-              "-b:v", "6000k",
-              "-maxrate", "6000k",
-              "-bufsize", "12000k",
+              "-sc_threshold", "0",
+              "-b:v", "2500k",         // Lower bitrate (2.5Mbps) prevents buffer starvation
+              "-maxrate", "2500k",
+              "-bufsize", "15000k", // Increased buffer (15Mb) to handle network jitter on weak connections
 
+              // AUDIO
               "-c:a", "aac",
-              "-b:a", "160k",
+              "-b:a", "128k",
               "-ar", "44100",
+              "-af", "aresample=async=1", // Prevent audio timestamp drift
 
+              // OUTPUT
               "-f", "flv",
               rtmp,
               ],
@@ -265,25 +276,27 @@ wss.on("connection", (ws, req) => {
             streaming = true;
             try { ws.send(JSON.stringify({ type: "ffmpeg_start", target: rtmpTarget, rtmp })); } catch {}
 
-            const logStream = fs.createWriteStream(RELAY_LOG_PATH, { flags: "a" });
-            logStream.write(`\n[${new Date().toISOString()}] ffmpeg start -> ${rtmp}\n`);
+            // LOGGING: Use console instead of file for Render compatibility
+            console.log(`[relay] ffmpeg start -> ${rtmp}`);
+            
             ffmpeg.stderr.on("data", (chunk) => {
               const line = chunk.toString();
-              try {
-                logStream.write(line);
-              } catch {}
-
-              const now = Date.now();
-              if (now - lastErrSentMs > 1000 && /error|failed|invalid|timed out|refused/i.test(line)) {
-                lastErrSentMs = now;
-                try { ws.send(JSON.stringify({ type: "ffmpeg_error", message: line.trim().slice(0, 220) })); } catch {}
+              // Log only errors/warnings to console to avoid noise
+              if (/error|failed|invalid|timed out|refused/i.test(line)) {
+                 console.error(`[ffmpeg] ${line.trim()}`);
+                 
+                 const now = Date.now();
+                 if (now - lastErrSentMs > 1000) {
+                    lastErrSentMs = now;
+                    try { ws.send(JSON.stringify({ type: "ffmpeg_error", message: line.trim().slice(0, 220) })); } catch {}
+                 }
               }
             });
 
             ffmpeg.on("close", (code) => {
               streaming = false;
               ffmpeg = null;
-              try { logStream.end(); } catch {}
+              // try { logStream.end(); } catch {} // Removed file stream
               try { ws.send(JSON.stringify({ type: "ffmpeg_closed", code, target: rtmpTarget })); } catch {}
               if (wantStreaming && lastStreamKey && ws.readyState === ws.OPEN) {
                 const diedQuick = Date.now() - lastFfmpegStartMs < 8000;

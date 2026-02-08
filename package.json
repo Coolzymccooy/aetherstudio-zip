@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.33.0",
+    "@mediapipe/selfie_segmentation": "^0.1.1675465747",
     "firebase": "^12.6.0",
     "lucide-react": "^0.561.0",
     "peerjs": "1.5.4",
