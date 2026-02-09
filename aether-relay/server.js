@@ -23,8 +23,16 @@ const loadGoogleGenAi = async () => {
 const PORT = Number(process.env.PORT || 8080);
 const RELAY_TOKEN = process.env.RELAY_TOKEN || ""; // optional
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const DEFAULT_FFMPEG = path.join(__dirname, "..", "tools", "ffmpeg", "ffmpeg-8.0.1-essentials_build", "bin", "ffmpeg.exe");
-const FFMPEG_PATH = process.env.FFMPEG_PATH || DEFAULT_FFMPEG;
+const DEFAULT_FFMPEG_WIN = path.join(__dirname, "..", "tools", "ffmpeg", "ffmpeg-8.0.1-essentials_build", "bin", "ffmpeg.exe");
+const DEFAULT_FFMPEG_NIX = "/usr/bin/ffmpeg";
+const resolveFfmpegPath = () => {
+  const envPath = (process.env.FFMPEG_PATH || "").trim();
+  const platformDefault = process.platform === "win32" ? DEFAULT_FFMPEG_WIN : DEFAULT_FFMPEG_NIX;
+  if (envPath && fs.existsSync(envPath)) return envPath;
+  if (fs.existsSync(platformDefault)) return platformDefault;
+  return envPath || platformDefault;
+};
+const FFMPEG_PATH = resolveFfmpegPath();
 const RELAY_LOG_PATH = process.env.RELAY_LOG_PATH || path.join(__dirname, "..", "tools", "relay-ffmpeg.log");
 
 const RTMP_URL_PRIMARY = process.env.RTMP_URL_PRIMARY || "rtmps://a.rtmp.youtube.com/live2";

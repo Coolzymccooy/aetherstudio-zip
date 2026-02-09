@@ -692,10 +692,24 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
   const addCameraSource = async (videoDeviceId: string, audioDeviceId: string, videoLabel: string) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { deviceId: { exact: videoDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: audioDeviceId ? { deviceId: { exact: audioDeviceId } } : false
-      });
+      const audioConstraint = audioDeviceId ? { deviceId: { exact: audioDeviceId } } : false;
+      const attempts: MediaStreamConstraints[] = [
+        { video: { deviceId: { exact: videoDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: audioConstraint },
+        { video: { deviceId: { exact: videoDeviceId } }, audio: audioConstraint },
+        { video: true, audio: audioConstraint },
+      ];
+
+      let stream: MediaStream | null = null;
+      let lastErr: any = null;
+      for (const constraints of attempts) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          break;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      if (!stream) throw lastErr;
       
       const layerId = generateId();
       const newLayer: Layer = {
@@ -723,7 +737,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       setSelectedLayerId(layerId);
       setShowDeviceSelector(false);
     } catch (err) {
-      setStatusMsg({ type: 'error', text: "Failed to access device." });
+      const name = (err as any)?.name || '';
+      let msg = "Failed to access device.";
+      if (name === 'NotReadableError') msg = "Camera is busy or already in use. Close other apps and retry.";
+      else if (name === 'NotAllowedError' || name === 'SecurityError') msg = "Camera permission blocked. Allow access in browser settings.";
+      else if (name === 'NotFoundError') msg = "No camera device found.";
+      setStatusMsg({ type: 'error', text: msg });
     }
   };
 
@@ -1781,7 +1800,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   <AIPanel onAddLayer={(src) => addImageLayer(src, 'AI Background')} />
                 )}
                 {rightPanelTab === 'inputs' && (
-                  <div className="h-full overflow-y-auto p-4 space-y-3">
+                  <div className="h-full overflow-y-auto p-4 pb-24 space-y-3">
                     <div className="flex items-center justify-between">
                       <div>
                         <h3 className="text-sm font-bold text-white">Input Manager</h3>

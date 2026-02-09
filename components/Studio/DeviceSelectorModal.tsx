@@ -13,14 +13,28 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
   const [selectedAudio, setSelectedAudio] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   const loadDevices = async () => {
     setIsLoading(true);
     setError(null);
+    setWarning(null);
     try {
-      // Must request permission first to see labels
-      await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      
+      // Request camera permission (labels show after permission)
+      try {
+        const permStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        permStream.getTracks().forEach((t) => t.stop());
+      } catch (err: any) {
+        const name = err?.name || '';
+        if (name === 'NotReadableError') {
+          setWarning('Camera is in use by another app. Close it and retry.');
+        } else if (name === 'NotAllowedError' || name === 'SecurityError') {
+          setWarning('Camera permission blocked. Please allow access and retry.');
+        } else {
+          setWarning('Could not access camera permissions. You can still select devices below.');
+        }
+      }
+
       const devices = await navigator.mediaDevices.enumerateDevices();
       
       const video = devices.filter(d => d.kind === 'videoinput');
@@ -32,6 +46,10 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
       if (video.length > 0) setSelectedVideo(video[0].deviceId);
       if (audio.length > 0) setSelectedAudio(audio[0].deviceId);
       if (audio.length === 0) setSelectedAudio("");
+
+      if (video.length === 0) {
+        setError("No camera devices found.");
+      }
       
     } catch (err) {
       console.error("Error loading devices", err);
@@ -82,6 +100,11 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
           </div>
         ) : (
           <div className="space-y-6">
+            {warning && (
+              <div className="bg-yellow-500/10 border border-yellow-500/20 text-yellow-200 p-3 rounded-lg text-xs">
+                {warning}
+              </div>
+            )}
             {/* Video Selection */}
             <div className="space-y-2">
               <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">

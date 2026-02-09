@@ -224,6 +224,30 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
         }
       }
 
+      if (!stream) {
+        try {
+          addLog("Fallback: basic camera...");
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode },
+            audio: audioConstraints,
+          });
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+
+      if (!stream) {
+        try {
+          addLog("Fallback: video-only...");
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode },
+            audio: false,
+          });
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+
       if (!stream) throw lastErr || new Error("Unable to start camera");
 
       // monitor interruptions
@@ -258,7 +282,14 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
     } catch (e: any) {
       setIsCameraReady(false);
       setIsInterrupted(false);
-      addLog(`Cam Error: ${e?.name || "unknown"} - ${e?.message || ""}`);
+      const name = e?.name || "unknown";
+      if (name === "NotReadableError") {
+        addLog("Cam Error: Camera in use by another app. Close it and retry.");
+      } else if (name === "NotAllowedError" || name === "SecurityError") {
+        addLog("Cam Error: Permission blocked. Allow camera access.");
+      } else {
+        addLog(`Cam Error: ${name} - ${e?.message || ""}`);
+      }
       return null;
     }
   }, [addLog, audioDevices, camQuality, facingMode, isMuted, loadAudioDevices, selectedAudioId, stopAllMedia]);
@@ -788,6 +819,15 @@ useEffect(() => {
                   <Loader2 size={16} className="animate-spin text-yellow-500" />
                 )}
               </div>
+
+              {!isCameraReady && (
+                <button
+                  onClick={() => initCamera()}
+                  className="w-full bg-white/10 text-white text-xs py-2 rounded-lg border border-white/10 hover:bg-white/20"
+                >
+                  Retry Camera
+                </button>
+              )}
 
               <div className="flex items-center justify-between text-sm">
                 <span className="text-gray-400 flex items-center gap-2">
