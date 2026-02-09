@@ -242,7 +242,7 @@ wss.on("connection", (ws, req) => {
         }
 
         if (msg.type === "ping") {
-          ws.send(JSON.stringify({ type: "pong", t: Date.now() }));
+          ws.send(JSON.stringify({ type: "pong", t: Date.now(), echo: msg.t || null }));
           return;
         }
 

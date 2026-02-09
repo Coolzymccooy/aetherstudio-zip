@@ -142,6 +142,11 @@ wss.on('connection', (ws) => {
                         stopFFmpeg(currentSessionId);
                     }
                     break;
+                case 'ping':
+                    try {
+                        ws.send(JSON.stringify({ type: 'pong', t: Date.now(), echo: data.t || null }));
+                    } catch {}
+                    break;
 
                 case 'offer':
                 case 'answer':

@@ -71,6 +71,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [peerId, setPeerId] = useState<string>('');
   const [isRecording, setIsRecording] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{type: 'error' | 'info' | 'warn', text: string} | null>(null);
+  const [streamHealth, setStreamHealth] = useState<{ kbps: number; drops: number; rttMs: number | null; queueKb: number }>({
+    kbps: 0,
+    drops: 0,
+    rttMs: null,
+    queueKb: 0,
+  });
 
   type CameraSourceKind = 'local' | 'phone';
   type CameraSourceStatus = 'pending' | 'live' | 'failed';
@@ -191,6 +197,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const liveIntentRef = useRef<boolean>(false);
   const liveStartGuardRef = useRef<number>(0);
   const transitionRafRef = useRef<number | null>(null);
+  const streamHealthRef = useRef<{ bytes: number; drops: number; lastTs: number }>({ bytes: 0, drops: 0, lastTs: Date.now() });
+  const streamHealthTimerRef = useRef<number | null>(null);
+  const relayPingTimerRef = useRef<number | null>(null);
 
   // --- EFFECTS ---
 
@@ -258,6 +267,63 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       return () => clearTimeout(timer);
     }
   }, [statusMsg]);
+
+  useEffect(() => {
+    if (streamHealthTimerRef.current) {
+      window.clearInterval(streamHealthTimerRef.current);
+      streamHealthTimerRef.current = null;
+    }
+    if (streamStatus !== StreamStatus.LIVE) {
+      setStreamHealth((prev) => ({ ...prev, kbps: 0, drops: 0, queueKb: 0 }));
+      streamHealthRef.current = { bytes: 0, drops: 0, lastTs: Date.now() };
+      return;
+    }
+
+    streamHealthRef.current = { bytes: 0, drops: 0, lastTs: Date.now() };
+    streamHealthTimerRef.current = window.setInterval(() => {
+      const now = Date.now();
+      const elapsed = Math.max(1, (now - streamHealthRef.current.lastTs) / 1000);
+      const kbps = Math.round((streamHealthRef.current.bytes * 8) / 1000 / elapsed);
+      const queueKb = Math.round((streamingSocketRef.current?.bufferedAmount || 0) / 1024);
+      setStreamHealth((prev) => ({
+        ...prev,
+        kbps,
+        drops: streamHealthRef.current.drops,
+        queueKb,
+      }));
+      streamHealthRef.current.bytes = 0;
+      streamHealthRef.current.lastTs = now;
+    }, 1000);
+
+    return () => {
+      if (streamHealthTimerRef.current) {
+        window.clearInterval(streamHealthTimerRef.current);
+        streamHealthTimerRef.current = null;
+      }
+    };
+  }, [streamStatus]);
+
+  useEffect(() => {
+    if (relayPingTimerRef.current) {
+      window.clearInterval(relayPingTimerRef.current);
+      relayPingTimerRef.current = null;
+    }
+    if (!relayConnected) {
+      setStreamHealth((prev) => ({ ...prev, rttMs: null }));
+      return;
+    }
+    relayPingTimerRef.current = window.setInterval(() => {
+      const ws = streamingSocketRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: "ping", t: Date.now(), token: import.meta.env.VITE_RELAY_TOKEN }));
+    }, 5000);
+    return () => {
+      if (relayPingTimerRef.current) {
+        window.clearInterval(relayPingTimerRef.current);
+        relayPingTimerRef.current = null;
+      }
+    };
+  }, [relayConnected]);
 
   useEffect(() => {
     if (lowerThirdVisible) ensureLowerThirdLayers();
@@ -577,6 +643,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             ws.onclose = (ev) => {
                 setRelayConnected(false);
                 setRelayStatus(`Relay closed (${ev.code})`);
+                setStreamHealth((prev) => ({ ...prev, rttMs: null }));
                 if (liveIntentRef.current) {
                     setStatusMsg({ type: 'warn', text: "Relay lost. Attempting to reconnect..." });
                 }
@@ -592,6 +659,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             ws.onmessage = (ev) => {
                 try {
                     const msg = JSON.parse(String(ev.data || "{}"));
+                    if (msg?.type === "pong" && msg?.echo) {
+                        const rtt = Date.now() - Number(msg.echo);
+                        setStreamHealth((prev) => ({ ...prev, rttMs: rtt }));
+                        return;
+                    }
                     if (msg?.type === "started") setRelayStatus("Relay streaming");
                     if (msg?.type === "error") setRelayStatus(`Relay error: ${msg.error || "unknown"}`);
                 } catch {}
@@ -966,11 +1038,16 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     const recorder = new MediaRecorder(streamToRecord, options);
 
     recorder.ondataavailable = (e) => {
-      if (streamingSocketRef.current?.readyState === WebSocket.OPEN) {
-        if (streamingSocketRef.current.bufferedAmount > 256 * 1024) {
+      const socket = streamingSocketRef.current;
+      if (socket?.readyState === WebSocket.OPEN) {
+        if (socket.bufferedAmount > 256 * 1024) {
+          streamHealthRef.current.drops += 1;
           setStatusMsg({ type: 'warn', text: "Network congestion: Dropping frames!" });
-        } else if (e.data.size > 0) {
-          streamingSocketRef.current.send(e.data);
+          return;
+        }
+        if (e.data.size > 0) {
+          streamHealthRef.current.bytes += e.data.size;
+          socket.send(e.data);
         }
       }
     };
@@ -2044,6 +2121,16 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                     >
                       FFmpeg Check
                     </button>
+                  </div>
+                  <div className="mt-3 bg-aether-800/40 border border-aether-700 rounded p-2 text-[10px] text-gray-300">
+                    <div className="font-semibold text-white mb-1">Stream Health</div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                      <span>Bitrate: <span className="text-gray-400">{streamHealth.kbps} kbps</span></span>
+                      <span>Queue: <span className="text-gray-400">{streamHealth.queueKb} KB</span></span>
+                      <span>Drops: <span className="text-gray-400">{streamHealth.drops}</span></span>
+                      <span>RTT: <span className="text-gray-400">{streamHealth.rttMs !== null ? `${streamHealth.rttMs} ms` : "--"}</span></span>
+                    </div>
+                    <div className="text-[9px] text-gray-500 mt-1">Updates while Live. Drops indicate network backpressure.</div>
                   </div>
               </div>
               <div className="bg-aether-800/50 p-4 rounded-lg">

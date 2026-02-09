@@ -187,6 +187,9 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
     cameraInitInFlightRef.current = true;
     lastCameraInitRef.current = now;
     try {
+      if (streamRef.current && isCameraReady && !isInterrupted) {
+        return streamRef.current;
+      }
       // always “settle” UI first
       setIsCameraReady(false);
       setIsInterrupted(false);
@@ -303,7 +306,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
     } finally {
       cameraInitInFlightRef.current = false;
     }
-  }, [addLog, audioDevices, camQuality, facingMode, isMuted, loadAudioDevices, selectedAudioId, stopAllMedia]);
+  }, [addLog, audioDevices, camQuality, facingMode, isCameraReady, isInterrupted, isMuted, loadAudioDevices, selectedAudioId, stopAllMedia]);
 
   // wake lock + initial camera
   useEffect(() => {
