@@ -5,7 +5,20 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const url = require("url");
-const { GoogleGenAI } = require("@google/genai");
+let genAiModule = null;
+let genAiLoadError = null;
+
+const loadGoogleGenAi = async () => {
+  if (genAiModule) return genAiModule;
+  if (genAiLoadError) throw genAiLoadError;
+  try {
+    genAiModule = await import("@google/genai");
+    return genAiModule;
+  } catch (err) {
+    genAiLoadError = err;
+    throw err;
+  }
+};
 
 const PORT = Number(process.env.PORT || 8080);
 const RELAY_TOKEN = process.env.RELAY_TOKEN || ""; // optional
@@ -63,6 +76,14 @@ const server = http.createServer(async (req, res) => {
         const body = JSON.parse(raw);
         const prompt = (body.prompt || "").toString().trim();
         const query = (body.query || "").toString().trim();
+
+        let GoogleGenAI;
+        try {
+          ({ GoogleGenAI } = await loadGoogleGenAi());
+        } catch (err) {
+          sendJson(500, { error: "genai_not_installed", details: err?.message || "missing_dependency" });
+          return;
+        }
 
         const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
