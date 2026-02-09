@@ -68,6 +68,8 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   const wakeLockRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const relayWsRef = useRef<WebSocket | null>(null);
+  const cameraInitInFlightRef = useRef(false);
+  const lastCameraInitRef = useRef(0);
 
   const hostCheckTimerRef = useRef<number | null>(null);
   const hostCheckAttemptRef = useRef(0);
@@ -177,6 +179,13 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
 
   // --- Camera engine (stability-focused) ---
   const initCamera = useCallback(async (): Promise<MediaStream | null> => {
+    if (cameraInitInFlightRef.current) return streamRef.current;
+    const now = Date.now();
+    if (now - lastCameraInitRef.current < 1200) {
+      return streamRef.current;
+    }
+    cameraInitInFlightRef.current = true;
+    lastCameraInitRef.current = now;
     try {
       // always “settle” UI first
       setIsCameraReady(false);
@@ -199,7 +208,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
         : true;
 
       const attempts: CamQuality[] =
-        camQuality === "auto" ? ["4k", "1080p", "720p"] : [camQuality, "1080p", "720p"];
+        camQuality === "auto" ? ["1080p", "720p", "4k"] : [camQuality, "1080p", "720p"];
 
       let stream: MediaStream | null = null;
       let lastErr: any = null;
@@ -291,6 +300,8 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
         addLog(`Cam Error: ${name} - ${e?.message || ""}`);
       }
       return null;
+    } finally {
+      cameraInitInFlightRef.current = false;
     }
   }, [addLog, audioDevices, camQuality, facingMode, isMuted, loadAudioDevices, selectedAudioId, stopAllMedia]);
 
