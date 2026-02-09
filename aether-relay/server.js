@@ -62,6 +62,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/ai/health") {
+    if (!GEMINI_API_KEY) {
+      sendJson(503, { ok: false, error: "missing_gemini_api_key" });
+      return;
+    }
+    sendJson(200, { ok: true, service: "aether-ai", ts: new Date().toISOString() });
+    return;
+  }
+
   if (pathname === "/ai/chat" || pathname === "/ai/image") {
     if (!GEMINI_API_KEY) {
       sendJson(500, { error: "missing_gemini_api_key" });
