@@ -277,7 +277,7 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
           <div className="space-y-3 border-t border-aether-800 pt-4">
             <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                <Sparkles size={12} className="text-fuchsia-400" /> AI Effects
+                <Sparkles size={12} className="text-aether-accent" /> AI Effects
                 </label>
                 {!isPro && <span className="text-[9px] bg-aether-700 px-1.5 py-0.5 rounded text-aether-300">PRO</span>}
             </div>
@@ -287,7 +287,7 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
               <button 
                 disabled={!isPro}
                 onClick={() => isPro && onUpdate(layer.id, { backgroundRemoval: !layer.backgroundRemoval } as any)}
-                className={`w-10 h-5 rounded-full relative transition-colors ${layer.backgroundRemoval ? 'bg-fuchsia-500' : 'bg-gray-700'}`}
+                className={`w-10 h-5 rounded-full relative transition-colors ${layer.backgroundRemoval ? 'bg-aether-accent' : 'bg-gray-700'}`}
               >
                 <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${layer.backgroundRemoval ? 'left-6' : 'left-1'}`} />
               </button>

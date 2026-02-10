@@ -75,6 +75,8 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   const hostCheckAttemptRef = useRef(0);
 
   // --- State ---
+  const wifiMode = getQueryParam("wifi") === "1";
+
   const [roomId, setRoomId] = useState<string | null>(() => {
     return getQueryParam("room") || localStorage.getItem("aether_target_room");
   });
@@ -104,7 +106,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   const [selectedAudioId, setSelectedAudioId] = useState<string>("");
 
   // quality
-  const [camQuality, setCamQuality] = useState<CamQuality>("auto");
+  const [camQuality, setCamQuality] = useState<CamQuality>(() => (wifiMode ? "720p" : "auto"));
   const [batteryInfo, setBatteryInfo] = useState<{ level: number; charging: boolean } | null>(null);
 
   const addLog = useCallback((msg: string) => {
@@ -211,7 +213,9 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
         : true;
 
       const attempts: CamQuality[] =
-        camQuality === "auto" ? ["1080p", "720p", "4k"] : [camQuality, "1080p", "720p"];
+        camQuality === "auto"
+          ? (wifiMode ? ["720p", "1080p"] : ["1080p", "720p", "4k"])
+          : [camQuality, "1080p", "720p"];
 
       let stream: MediaStream | null = null;
       let lastErr: any = null;
@@ -306,7 +310,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
     } finally {
       cameraInitInFlightRef.current = false;
     }
-  }, [addLog, audioDevices, camQuality, facingMode, isCameraReady, isInterrupted, isMuted, loadAudioDevices, selectedAudioId, stopAllMedia]);
+  }, [addLog, audioDevices, camQuality, facingMode, isCameraReady, isInterrupted, isMuted, loadAudioDevices, selectedAudioId, stopAllMedia, wifiMode]);
 
   // wake lock + initial camera
   useEffect(() => {
@@ -533,7 +537,7 @@ useEffect(() => {
           const params = sender.getParameters();
           if (!params.encodings) params.encodings = [{}];
 
-          params.encodings[0].maxBitrate = 18_000_000; // 18 Mbps
+          params.encodings[0].maxBitrate = wifiMode ? 2_500_000 : 18_000_000; // Reduce bitrate on Wi-Fi mode
           (params as any).degradationPreference = "maintain-resolution";
 
           await sender.setParameters(params);
@@ -717,7 +721,7 @@ useEffect(() => {
             <button
               type="submit"
               disabled={!manualIdInput}
-              className="w-full bg-gradient-to-r from-aether-600 to-fuchsia-600 text-white font-bold py-4 rounded-xl disabled:opacity-50"
+              className="w-full bg-gradient-to-r from-aether-500 to-aether-accent text-white font-bold py-4 rounded-xl disabled:opacity-50"
             >
               Connect
             </button>

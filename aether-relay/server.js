@@ -5,6 +5,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const url = require("url");
+const crypto = require("crypto");
 let genAiModule = null;
 let genAiLoadError = null;
 
@@ -23,6 +24,8 @@ const loadGoogleGenAi = async () => {
 const PORT = Number(process.env.PORT || 8080);
 const RELAY_TOKEN = process.env.RELAY_TOKEN || ""; // optional
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const LICENSE_SECRET = process.env.LICENSE_SECRET || "";
+const LICENSE_ADMIN_TOKEN = process.env.LICENSE_ADMIN_TOKEN || "";
 const DEFAULT_FFMPEG_WIN = path.join(__dirname, "..", "tools", "ffmpeg", "ffmpeg-8.0.1-essentials_build", "bin", "ffmpeg.exe");
 const DEFAULT_FFMPEG_NIX = "/usr/bin/ffmpeg";
 const resolveFfmpegPath = () => {
@@ -41,6 +44,54 @@ const RTMP_URL_FALLBACK = process.env.RTMP_URL_FALLBACK || process.env.RTMP_URL 
 function buildRtmpUrl(base, streamKey) {
   return `${base.replace(/\/$/, "")}/${streamKey}`;
 }
+
+const base64UrlEncode = (buf) =>
+  Buffer.from(buf)
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+
+const base64UrlDecode = (str) => {
+  const pad = str.length % 4 ? "=".repeat(4 - (str.length % 4)) : "";
+  return Buffer.from(str.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64");
+};
+
+const signPayload = (payload) => {
+  const body = base64UrlEncode(JSON.stringify(payload));
+  const sig = base64UrlEncode(crypto.createHmac("sha256", LICENSE_SECRET).update(body).digest());
+  return `PRO_${body}.${sig}`;
+};
+
+const verifyKey = (rawKey) => {
+  if (!LICENSE_SECRET) {
+    return { ok: false, pro: false, message: "license_secret_missing" };
+  }
+  const key = String(rawKey || "").trim();
+  if (!key) return { ok: false, pro: false, message: "missing_key" };
+  const stripped = key.replace(/^PRO[_-]/i, "");
+  const parts = stripped.split(".");
+  if (parts.length !== 2) return { ok: false, pro: false, message: "bad_format" };
+  const [body, sig] = parts;
+  const expected = base64UrlEncode(crypto.createHmac("sha256", LICENSE_SECRET).update(body).digest());
+  const sigBuf = Buffer.from(sig);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    return { ok: false, pro: false, message: "invalid_signature" };
+  }
+  let payload = {};
+  try {
+    payload = JSON.parse(base64UrlDecode(body).toString("utf8"));
+  } catch {
+    return { ok: false, pro: false, message: "invalid_payload" };
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (payload.exp && now > payload.exp) {
+    return { ok: false, pro: false, message: "expired" };
+  }
+  const plan = String(payload.plan || "pro").toLowerCase();
+  return { ok: true, pro: plan === "pro", message: "ok", payload };
+};
 
 const server = http.createServer(async (req, res) => {
   const { pathname } = url.parse(req.url || "/");
@@ -67,6 +118,79 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === "/health") {
     sendJson(200, { ok: true, service: "aether-relay", ts: new Date().toISOString() });
+    return;
+  }
+
+  if (pathname === "/license/health") {
+    if (!LICENSE_SECRET) {
+      sendJson(503, { ok: false, error: "license_secret_missing" });
+      return;
+    }
+    sendJson(200, { ok: true, service: "aether-license", ts: new Date().toISOString() });
+    return;
+  }
+
+  if (pathname === "/license/verify") {
+    if (!LICENSE_SECRET) {
+      sendJson(503, { ok: false, error: "license_secret_missing" });
+      return;
+    }
+    const chunks = [];
+    req.on("data", (d) => chunks.push(d));
+    req.on("end", () => {
+      try {
+        const raw = Buffer.concat(chunks).toString("utf8") || "{}";
+        const body = JSON.parse(raw);
+        const result = verifyKey(body.key);
+        if (!result.ok) {
+          sendJson(401, { ok: false, pro: false, message: result.message });
+          return;
+        }
+        sendJson(200, { ok: true, pro: result.pro, message: "verified" });
+      } catch (e) {
+        sendJson(500, { ok: false, error: "license_exception", details: e?.message || "unknown" });
+      }
+    });
+    return;
+  }
+
+  if (pathname === "/license/issue") {
+    if (!LICENSE_SECRET) {
+      sendJson(503, { ok: false, error: "license_secret_missing" });
+      return;
+    }
+    if (!LICENSE_ADMIN_TOKEN) {
+      sendJson(403, { ok: false, error: "license_admin_disabled" });
+      return;
+    }
+    const adminHeader = req.headers["x-admin-token"] || req.headers["authorization"];
+    const adminToken = Array.isArray(adminHeader) ? adminHeader[0] : adminHeader;
+    if (String(adminToken || "").replace(/^Bearer\s+/i, "") !== LICENSE_ADMIN_TOKEN) {
+      sendJson(403, { ok: false, error: "license_admin_unauthorized" });
+      return;
+    }
+    const chunks = [];
+    req.on("data", (d) => chunks.push(d));
+    req.on("end", () => {
+      try {
+        const raw = Buffer.concat(chunks).toString("utf8") || "{}";
+        const body = JSON.parse(raw);
+        const plan = String(body.plan || "pro").toLowerCase();
+        const days = Number(body.days || 0);
+        const exp = body.exp ? Number(body.exp) : days > 0 ? Math.floor(Date.now() / 1000) + Math.floor(days * 86400) : undefined;
+        const payload = {
+          plan,
+          sub: body.email || body.userId || undefined,
+          iat: Math.floor(Date.now() / 1000),
+          exp,
+          meta: body.meta || undefined,
+        };
+        const key = signPayload(payload);
+        sendJson(200, { ok: true, key, plan, exp });
+      } catch (e) {
+        sendJson(500, { ok: false, error: "license_issue_exception", details: e?.message || "unknown" });
+      }
+    });
     return;
   }
 

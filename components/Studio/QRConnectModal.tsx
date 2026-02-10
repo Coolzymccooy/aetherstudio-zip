@@ -200,7 +200,7 @@ const getMobileUrl = () => {
                                 className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded border text-xs font-bold transition-colors ${
                                     !canShowQr 
                                     ? 'bg-gray-800 text-gray-500 border-gray-700 cursor-not-allowed'
-                                    : 'bg-gradient-to-r from-aether-600 to-fuchsia-600 text-white border-white/10 shadow-lg'
+                                    : 'bg-gradient-to-r from-aether-500 to-aether-accent text-white border-white/10 shadow-lg'
                                 }`}
                              >
                                 <Smartphone size={14} /> Launch App
@@ -212,7 +212,7 @@ const getMobileUrl = () => {
 
             {/* Right: Manual */}
             <div className="flex flex-col gap-4">
-                 <h3 className="text-sm font-bold text-fuchsia-300 uppercase tracking-wider text-center">Option 2: Manual Code</h3>
+                 <h3 className="text-sm font-bold text-aether-accent uppercase tracking-wider text-center">Option 2: Manual Code</h3>
                  
                  <div className="space-y-4 text-sm text-gray-300">
                     <p>If the QR code fails to open the camera:</p>

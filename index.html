@@ -3,11 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <meta name="theme-color" content="#0f0518" />
+    <meta name="theme-color" content="#050b13" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/icon-maskable.svg" />
     <title>Aether Studio - AI Streaming</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Unbounded:wght@500;700&display=swap" rel="stylesheet" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -15,36 +21,68 @@
           extend: {
             colors: {
               aether: {
-                900: '#0f0518',
-                800: '#1a0b2e',
-                700: '#2d1b4e',
-                500: '#7c3aed',
-                400: '#a78bfa',
-                accent: '#d946ef' 
+                900: '#050b13',
+                800: '#0b1626',
+                700: '#14243b',
+                500: '#2dd4bf',
+                400: '#5eead4',
+                accent: '#ff7a45' 
               }
             },
             fontFamily: {
-              sans: ['Inter', 'system-ui', 'sans-serif'],
+              sans: ['Space Grotesk', 'system-ui', 'sans-serif'],
+              display: ['Unbounded', 'Space Grotesk', 'system-ui'],
             }
           }
         }
       }
     </script>
     <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        background-color: #050b13;
+        background-image:
+          radial-gradient(1200px 600px at 15% -10%, rgba(45, 212, 191, 0.12), transparent 60%),
+          radial-gradient(900px 500px at 85% 0%, rgba(255, 122, 69, 0.10), transparent 55%),
+          radial-gradient(900px 500px at 50% 100%, rgba(94, 234, 212, 0.08), transparent 55%),
+          linear-gradient(180deg, rgba(5, 11, 19, 0.8), rgba(5, 11, 19, 1));
+      }
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background-image:
+          radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+          radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+        background-size: 24px 24px, 80px 80px;
+        background-position: 0 0, 10px 10px;
+        opacity: 0.35;
+        pointer-events: none;
+        mix-blend-mode: screen;
+      }
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: linear-gradient(135deg, rgba(15, 25, 40, 0.4), rgba(5, 11, 19, 0));
+        pointer-events: none;
+      }
       /* Custom Scrollbar */
       ::-webkit-scrollbar {
         width: 8px;
         height: 8px;
       }
       ::-webkit-scrollbar-track {
-        background: #0f0518; 
+        background: #050b13; 
       }
       ::-webkit-scrollbar-thumb {
-        background: #2d1b4e; 
+        background: #14243b; 
         border-radius: 4px;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: #7c3aed; 
+        background: #2dd4bf; 
       }
     </style>
   <script type="importmap">

@@ -10,6 +10,7 @@ import { QRConnectModal } from './QRConnectModal';
 import { HelpModal } from './HelpModal';
 import { Layer, SourceType, AudioTrackConfig, StreamStatus } from '../../types';
 import { auth } from '../../services/firebase';
+import { verifyLicenseKey, issueLicenseKey } from '../../services/licenseService';
 import { signOut, User } from 'firebase/auth';
 import { generateRoomId, getCleanPeerId } from '../../utils/peerId';
 import Peer, { DataConnection } from "peerjs";
@@ -46,6 +47,56 @@ const SourcePreview: React.FC<{ stream?: MediaStream }> = ({ stream }) => {
   return <video ref={ref} autoPlay muted playsInline className="w-16 h-10 object-cover rounded border border-aether-700" />;
 };
 
+const CollapsibleSection: React.FC<{
+  title: string;
+  subtitle?: string;
+  defaultOpen?: boolean;
+  open?: boolean;
+  onToggle?: (open: boolean) => void;
+  children: React.ReactNode;
+}> = ({ title, subtitle, defaultOpen, open, onToggle, children }) => (
+  <details
+    open={open ?? defaultOpen}
+    onToggle={(e) => {
+      if (!onToggle) return;
+      const el = e.currentTarget as HTMLDetailsElement;
+      onToggle(el.open);
+    }}
+    className="bg-aether-800/40 border border-aether-700 rounded-lg"
+  >
+    <summary className="cursor-pointer list-none px-3 py-2 flex items-center justify-between">
+      <div>
+        <div className="text-xs font-semibold text-white">{title}</div>
+        {subtitle && <div className="text-[10px] text-gray-500">{subtitle}</div>}
+      </div>
+      <div className="text-[10px] text-gray-400">Toggle</div>
+    </summary>
+    <div className="px-3 pb-3 pt-1 space-y-2">
+      {children}
+    </div>
+  </details>
+);
+
+const SettingsSection: React.FC<{
+  title: string;
+  subtitle?: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}> = ({ title, subtitle, defaultOpen, children }) => (
+  <details open={defaultOpen} className="bg-aether-800/50 border border-aether-700 rounded-lg">
+    <summary className="cursor-pointer list-none px-4 py-3 flex items-center justify-between">
+      <div>
+        <div className="text-sm font-bold text-white">{title}</div>
+        {subtitle && <div className="text-[10px] text-gray-400">{subtitle}</div>}
+      </div>
+      <div className="text-[10px] text-gray-400">Toggle</div>
+    </summary>
+    <div className="px-4 pb-4 space-y-3">
+      {children}
+    </div>
+  </details>
+);
+
 export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   // --- STATE DECLARATIONS ---
   const [cloudConnected, setCloudConnected] = useState(false);
@@ -55,6 +106,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [rightPanelTab, setRightPanelTab] = useState<'properties' | 'ai' | 'inputs'>('ai');
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsPos, setSettingsPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [inputsSection, setInputsSection] = useState<string>('input-manager');
   const [showDeviceSelector, setShowDeviceSelector] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
@@ -63,8 +116,17 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [micPickerTrackId, setMicPickerTrackId] = useState<string | null>(null);
   const [availableMics, setAvailableMics] = useState<MediaDeviceInfo[]>([]);
   const [streamKey, setStreamKey] = useState(() => localStorage.getItem('aether_stream_key') || '');
-  const [licenseKey, setLicenseKey] = useState(() => localStorage.getItem('aether_license_key') || '');
+  const [licenseKey, setLicenseKey] = useState(() => (localStorage.getItem('aether_license_key') || '').toUpperCase());
+  const [licenseStatus, setLicenseStatus] = useState<{ state: 'idle' | 'checking' | 'valid' | 'invalid' | 'error'; message?: string; source?: 'server' | 'offline' }>({ state: 'idle' });
+  const [adminToken, setAdminToken] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return sessionStorage.getItem('aether_admin_token') || '';
+  });
+  const [issueEmail, setIssueEmail] = useState(() => user?.email || '');
+  const [issueDays, setIssueDays] = useState(365);
+  const [issueStatus, setIssueStatus] = useState<{ state: 'idle' | 'issuing' | 'ok' | 'error'; message?: string; key?: string }>({ state: 'idle' });
   const [streamQuality, setStreamQuality] = useState<'high' | 'medium' | 'low'>(() => (localStorage.getItem('aether_stream_quality') as any) || 'medium');
+  const [wifiMode, setWifiMode] = useState(() => localStorage.getItem('aether_wifi_mode') === 'true');
   const [desktopConnected, setDesktopConnected] = useState(false);
   const [relayConnected, setRelayConnected] = useState(false);
   const [relayStatus, setRelayStatus] = useState<string | null>(null);
@@ -163,7 +225,18 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
      return newId;
   });
 
-  const isPro = licenseKey.startsWith('PRO_');
+  const normalizedLicenseKey = licenseKey.trim().toUpperCase();
+  const localFormatValid =
+    /^PRO_[A-Z0-9]{4}(?:-[A-Z0-9]{4}){1,3}$/.test(normalizedLicenseKey) ||
+    /^PRO_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(normalizedLicenseKey);
+  const allowOfflinePro = (import.meta.env.VITE_ALLOW_OFFLINE_PRO as string | undefined) === 'true' || import.meta.env.DEV;
+  const adminEmails = (import.meta.env.VITE_ADMIN_EMAILS as string | undefined || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  const isAdminByEmail = !!user?.email && adminEmails.includes(user.email.toLowerCase());
+  const adminUnlocked = isAdminByEmail || !!adminToken;
+  const isPro = licenseStatus.state === 'valid' ? true : (licenseStatus.state === 'invalid' ? false : (allowOfflinePro && localFormatValid));
 
   // --- REFS ---
   const activeCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -172,6 +245,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const mobileCamLayerIdRef = useRef<string | null>(null);
   const localRecorderRef = useRef<MediaRecorder | null>(null);
   const localChunksRef = useRef<Blob[]>([]);
+  const settingsPanelRef = useRef<HTMLDivElement | null>(null);
+  const settingsDragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
   
   // Audio Refs
   const audioContext = useRef<AudioContext | null>(null);
@@ -202,6 +277,62 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const relayPingTimerRef = useRef<number | null>(null);
 
   // --- EFFECTS ---
+  const clampSettingsPos = useCallback((x: number, y: number) => {
+    const panel = settingsPanelRef.current;
+    const width = panel?.offsetWidth || 520;
+    const height = panel?.offsetHeight || 600;
+    const maxX = Math.max(8, window.innerWidth - width - 8);
+    const maxY = Math.max(8, window.innerHeight - height - 8);
+    return {
+      x: Math.min(Math.max(8, x), maxX),
+      y: Math.min(Math.max(8, y), maxY),
+    };
+  }, []);
+
+  const handleSettingsDrag = useCallback((e: MouseEvent) => {
+    const drag = settingsDragRef.current;
+    if (!drag) return;
+    const next = clampSettingsPos(drag.originX + (e.clientX - drag.startX), drag.originY + (e.clientY - drag.startY));
+    setSettingsPos(next);
+  }, [clampSettingsPos]);
+
+  const endSettingsDrag = useCallback(() => {
+    settingsDragRef.current = null;
+    window.removeEventListener('mousemove', handleSettingsDrag);
+    window.removeEventListener('mouseup', endSettingsDrag);
+  }, [handleSettingsDrag]);
+
+  const startSettingsDrag = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('[data-no-drag]')) return;
+    e.preventDefault();
+    settingsDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: settingsPos.x,
+      originY: settingsPos.y,
+    };
+    window.addEventListener('mousemove', handleSettingsDrag);
+    window.addEventListener('mouseup', endSettingsDrag);
+  }, [endSettingsDrag, handleSettingsDrag, settingsPos.x, settingsPos.y]);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    const timer = window.setTimeout(() => {
+      setSettingsPos(prev => {
+        if (prev.x !== 0 || prev.y !== 0) return prev;
+        return clampSettingsPos(window.innerWidth - 560, 80);
+      });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [showSettings, clampSettingsPos]);
+
+  useEffect(() => {
+    if (!showSettings) {
+      endSettingsDrag();
+    }
+  }, [showSettings, endSettingsDrag]);
 
   // Audio Context Resume
   useEffect(() => {
@@ -224,8 +355,21 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   }, [streamKey]);
 
   useEffect(() => {
-      localStorage.setItem('aether_license_key', licenseKey);
-  }, [licenseKey]);
+      localStorage.setItem('aether_license_key', normalizedLicenseKey);
+  }, [normalizedLicenseKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (adminToken) {
+      sessionStorage.setItem('aether_admin_token', adminToken);
+    } else {
+      sessionStorage.removeItem('aether_admin_token');
+    }
+  }, [adminToken]);
+
+  useEffect(() => {
+      localStorage.setItem('aether_wifi_mode', wifiMode ? 'true' : 'false');
+  }, [wifiMode]);
 
   useEffect(() => {
       localStorage.setItem('aether_auto_director', String(autoDirectorOn));
@@ -267,6 +411,58 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       return () => clearTimeout(timer);
     }
   }, [statusMsg]);
+
+  useEffect(() => {
+    if (!normalizedLicenseKey) {
+      setLicenseStatus({ state: 'idle' });
+      return;
+    }
+    if (!localFormatValid) {
+      setLicenseStatus({ state: 'invalid', message: 'Invalid key format.', source: 'offline' });
+      return;
+    }
+    let cancelled = false;
+    setLicenseStatus({ state: 'checking' });
+    const timer = window.setTimeout(async () => {
+      const res = await verifyLicenseKey(normalizedLicenseKey);
+      if (cancelled) return;
+      if (res.source === 'server') {
+        setLicenseStatus(res.ok && res.pro ? { state: 'valid', message: res.message, source: 'server' } : { state: 'invalid', message: res.message || 'License not valid.', source: 'server' });
+        return;
+      }
+      if (allowOfflinePro && localFormatValid) {
+        setLicenseStatus({ state: 'valid', message: 'Offline validation (dev mode).', source: 'offline' });
+        return;
+      }
+      setLicenseStatus({ state: 'error', message: 'License server unreachable.', source: 'offline' });
+    }, 450);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [normalizedLicenseKey, localFormatValid, allowOfflinePro]);
+
+  const handleIssueLicense = useCallback(async () => {
+    if (!adminToken) {
+      setIssueStatus({ state: 'error', message: 'Admin token required.' });
+      return;
+    }
+    setIssueStatus({ state: 'issuing' });
+    const res = await issueLicenseKey({
+      token: adminToken,
+      email: issueEmail?.trim(),
+      days: issueDays,
+      plan: "pro",
+    });
+    if (!res.ok || !res.key) {
+      setIssueStatus({ state: 'error', message: res.message || 'Failed to issue license.' });
+      return;
+    }
+    setIssueStatus({ state: 'ok', key: res.key, message: 'License issued.' });
+    try {
+      await navigator.clipboard?.writeText(res.key);
+    } catch {}
+  }, [adminToken, issueDays, issueEmail]);
 
   useEffect(() => {
     if (streamHealthTimerRef.current) {
@@ -1022,7 +1218,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       low: { v: 1_000_000, a: 64_000, fps: 24 }
     };
 
-    const { v: vBits, a: aBits, fps } = qualitySettings[streamQuality];
+    const wifiQuality = { v: 900_000, a: 64_000, fps: 24 };
+    const effectiveQuality = wifiMode ? wifiQuality : qualitySettings[streamQuality];
+    const { v: vBits, a: aBits, fps } = effectiveQuality;
 
     const options = MediaRecorder.isTypeSupported(preferred)
       ? { mimeType: preferred, videoBitsPerSecond: vBits, audioBitsPerSecond: aBits }
@@ -1223,6 +1421,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         params.set('peerPath', peerPath);
         params.set('peerSecure', peerSecure ? 'true' : 'false');
       }
+    }
+    if (wifiMode) {
+      params.set('wifi', '1');
     }
     return `${url}/?${params.toString()}`;
   };
@@ -1708,7 +1909,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
   // --- RENDER ---
   return (
-    <div className="fixed inset-0 flex flex-col w-full bg-aether-900 text-gray-200 font-sans selection:bg-aether-500 selection:text-white relative overflow-hidden">
+    <div className="fixed inset-0 flex flex-col w-full bg-aether-900/95 text-gray-200 font-sans selection:bg-aether-500 selection:text-white relative overflow-hidden">
       <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
       
       {statusMsg && (
@@ -1779,10 +1980,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
       <header className="h-14 border-b border-aether-700 bg-aether-900/90 flex items-center justify-between px-6 z-10 backdrop-blur-md">
         <div className="flex items-center gap-2 cursor-pointer" onClick={onBack}>
-          <div className="w-8 h-8 bg-gradient-to-br from-aether-500 to-fuchsia-500 rounded-lg flex items-center justify-center shadow-lg">
+          <div className="w-8 h-8 bg-gradient-to-br from-aether-500 to-aether-accent rounded-lg flex items-center justify-center shadow-lg">
             <Zap className="text-white fill-current" size={18} />
           </div>
-          <h1 className="text-xl font-bold tracking-tight text-white">Aether<span className="text-fuchsia-400 font-light">Studio</span></h1>
+          <h1 className="text-xl font-display font-semibold tracking-tight text-white">
+            Aether<span className="text-aether-400 font-normal">Studio</span>
+          </h1>
         </div>
         <div className="flex items-center gap-4 bg-aether-800 p-1.5 rounded-full border border-aether-700">
            <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase ${streamStatus === StreamStatus.LIVE ? 'bg-red-600 text-white animate-pulse' : 'text-gray-500'}`}>
@@ -1836,8 +2039,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
-        <aside className="w-16 flex flex-col items-center py-6 gap-6 border-r border-aether-700 bg-aether-800/50">
+      <div className="flex flex-1 overflow-hidden flex-col md:flex-row">
+        <aside className="w-16 hidden md:flex flex-col items-center py-6 gap-6 border-r border-aether-700 bg-aether-800/50">
            <SourceButton icon={<Camera size={24} />} label="Camera" onClick={() => setShowDeviceSelector(true)} />
            <SourceButton icon={<Smartphone size={24} />} label="Mobile" onClick={createPhoneSource} />
            <SourceButton icon={<Monitor size={24} />} label="Screen" onClick={addScreenSource} />
@@ -1845,8 +2048,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
            <SourceButton icon={<Type size={24} />} label="Text" onClick={addTextLayer} />
            <SourceButton icon={<HelpCircle size={24} />} label="Help" onClick={() => setShowHelpModal(true)} />
         </aside>
-        <main className="flex-1 flex flex-col relative bg-[#05010a] overflow-hidden">
-          <div className="flex-1 p-8 flex items-center justify-center">
+        <main className="flex-1 flex flex-col relative bg-aether-900/80 overflow-hidden">
+          <div className="flex-1 p-4 md:p-8 flex items-center justify-center">
             <CanvasStage 
                 layers={layers} 
                 onCanvasReady={handleCanvasReady} 
@@ -1863,7 +2066,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             onOpenSettings={openMicPicker}
           />
         </main>
-        <div className="w-80 border-l border-aether-700 bg-aether-900 flex flex-col">
+        <div className="w-full md:w-80 md:border-l border-aether-700 bg-aether-900 flex flex-col">
             <div className="flex border-b border-aether-700">
                 <button onClick={() => setRightPanelTab('properties')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'properties' ? 'bg-aether-800 text-white' : 'text-gray-500'}`}><Sliders size={14} /> Properties</button>
                 <button onClick={() => setRightPanelTab('inputs')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'inputs' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Camera size={14} /> Inputs</button>
@@ -1878,42 +2081,51 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                 )}
                 {rightPanelTab === 'inputs' && (
                   <div className="h-full overflow-y-auto p-4 pb-24 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h3 className="text-sm font-bold text-white">Input Manager</h3>
-                        <p className="text-[10px] text-gray-500">Local cameras and phones</p>
+                    <CollapsibleSection
+                      title="Input Manager"
+                      subtitle="Local cameras and phones"
+                      open={inputsSection === 'input-manager'}
+                      onToggle={(open) => setInputsSection(open ? 'input-manager' : '')}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-[10px] text-gray-500">Add sources and manage live cuts</div>
+                        <div className="flex gap-2">
+                          <button onClick={() => setShowDeviceSelector(true)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Add Local</button>
+                          <button onClick={createPhoneSource} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Add Phone</button>
+                        </div>
                       </div>
                       <div className="flex gap-2">
-                        <button onClick={() => setShowDeviceSelector(true)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Add Local</button>
-                        <button onClick={createPhoneSource} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Add Phone</button>
+                        <button onClick={cutToNext} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Cut To Next</button>
+                        <button onClick={emergencyWide} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Emergency Wide</button>
                       </div>
-                    </div>
+                    </CollapsibleSection>
 
-                    <div className="flex gap-2">
-                      <button onClick={cutToNext} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Cut To Next</button>
-                      <button onClick={emergencyWide} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Emergency Wide</button>
-                    </div>
-
-                    <div className="flex items-center justify-between bg-aether-800/40 border border-aether-700 rounded-lg p-2">
-                      <div>
-                        <div className="text-xs font-semibold text-white">Composer Mode</div>
-                        <div className="text-[10px] text-gray-500">Main + thumbnails layout</div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button onClick={applyComposerLayout} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Apply</button>
-                        <label className="text-[10px] text-gray-300 flex items-center gap-1">
-                          <input type="checkbox" checked={composerMode} onChange={(e) => setComposerMode(e.target.checked)} />
-                          On
-                        </label>
-                      </div>
-                    </div>
-
-                    <div className="bg-aether-800/40 border border-aether-700 rounded-lg p-3 space-y-2">
+                    <CollapsibleSection
+                      title="Composer Mode"
+                      subtitle="Main + thumbnails layout"
+                      open={inputsSection === 'composer'}
+                      onToggle={(open) => setInputsSection(open ? 'composer' : '')}
+                    >
                       <div className="flex items-center justify-between">
-                        <div>
-                          <div className="text-xs font-semibold text-white">Auto-Director</div>
-                          <div className="text-[10px] text-gray-500">Auto switches cameras on a timer</div>
+                        <div className="text-[10px] text-gray-500">Apply a staged layout to the program view</div>
+                        <div className="flex items-center gap-2">
+                          <button onClick={applyComposerLayout} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Apply</button>
+                          <label className="text-[10px] text-gray-300 flex items-center gap-1">
+                            <input type="checkbox" checked={composerMode} onChange={(e) => setComposerMode(e.target.checked)} />
+                            On
+                          </label>
                         </div>
+                      </div>
+                    </CollapsibleSection>
+
+                    <CollapsibleSection
+                      title="Auto-Director"
+                      subtitle="Auto switches cameras on a timer"
+                      open={inputsSection === 'auto-director'}
+                      onToggle={(open) => setInputsSection(open ? 'auto-director' : '')}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-[10px] text-gray-500">Rotate through inputs automatically</div>
                         <label className="text-[10px] text-gray-300 flex items-center gap-1">
                           <input type="checkbox" checked={autoDirectorOn} onChange={(e) => setAutoDirectorOn(e.target.checked)} />
                           On
@@ -1928,10 +2140,14 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                           className="w-16 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
                         />
                       </div>
-                    </div>
+                    </CollapsibleSection>
 
-                    <div className="bg-aether-800/40 border border-aether-700 rounded-lg p-3 space-y-2">
-                      <div className="text-xs font-semibold text-white">Lower Thirds</div>
+                    <CollapsibleSection
+                      title="Lower Thirds"
+                      subtitle="Name + title overlays"
+                      open={inputsSection === 'lower-thirds'}
+                      onToggle={(open) => setInputsSection(open ? 'lower-thirds' : '')}
+                    >
                       <input
                         value={lowerThirdName}
                         onChange={(e) => setLowerThirdName(e.target.value)}
@@ -1949,10 +2165,14 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                         <button onClick={() => setLowerThirdVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Hide</button>
                         <button onClick={() => showLowerThirdTemporarily(5000)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Show 5s</button>
                       </div>
-                    </div>
+                    </CollapsibleSection>
 
-                    <div className="bg-aether-800/40 border border-aether-700 rounded-lg p-3 space-y-2">
-                      <div className="text-xs font-semibold text-white">Transitions</div>
+                    <CollapsibleSection
+                      title="Transitions"
+                      subtitle="Cut or fade between scenes"
+                      open={inputsSection === 'transitions'}
+                      onToggle={(open) => setInputsSection(open ? 'transitions' : '')}
+                    >
                       <div className="flex items-center gap-2">
                         <select
                           value={transitionMode}
@@ -1970,27 +2190,33 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                         />
                         <span className="text-[10px] text-gray-400">ms</span>
                       </div>
-                    </div>
+                    </CollapsibleSection>
 
-                    <div className="bg-aether-800/40 border border-aether-700 rounded-lg p-3 space-y-2">
-                      <div className="text-xs font-semibold text-white">Scene Presets</div>
-                      <div className="flex items-center gap-2">
+                    <CollapsibleSection
+                      title="Scene Presets"
+                      subtitle="Save and recall layouts"
+                      open={inputsSection === 'scene-presets'}
+                      onToggle={(open) => setInputsSection(open ? 'scene-presets' : '')}
+                    >
+                      <div className="space-y-2">
                         <input
                           value={presetName}
                           onChange={(e) => setPresetName(e.target.value)}
-                          className="flex-1 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                          className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
                           placeholder="Preset name"
                         />
-                        <select
-                          value={layoutTemplate}
-                          onChange={(e) => setLayoutTemplate(e.target.value as any)}
-                          className="bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                        >
-                          <option value="main_thumbs">Main + Thumbs</option>
-                          <option value="grid_2x2">2x2 Grid</option>
-                          <option value="freeform">Freeform</option>
-                        </select>
-                        <button onClick={saveScenePreset} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Save</button>
+                        <div className="grid grid-cols-[1fr_auto] gap-2">
+                          <select
+                            value={layoutTemplate}
+                            onChange={(e) => setLayoutTemplate(e.target.value as any)}
+                            className="bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                          >
+                            <option value="main_thumbs">Main + Thumbs</option>
+                            <option value="grid_2x2">2x2 Grid</option>
+                            <option value="freeform">Freeform</option>
+                          </select>
+                          <button onClick={saveScenePreset} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Save</button>
+                        </div>
                       </div>
                       {scenePresets.length === 0 && (
                         <div className="text-[10px] text-gray-500">No presets yet.</div>
@@ -2002,10 +2228,14 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                           <button onClick={() => deleteScenePreset(p.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Delete</button>
                         </div>
                       ))}
-                    </div>
+                    </CollapsibleSection>
 
-                    <div className="bg-aether-800/40 border border-aether-700 rounded-lg p-3 space-y-2">
-                      <div className="text-xs font-semibold text-white">Audience Studio</div>
+                    <CollapsibleSection
+                      title="Audience Studio"
+                      subtitle="Pinned + ticker messages"
+                      open={inputsSection === 'audience'}
+                      onToggle={(open) => setInputsSection(open ? 'audience' : '')}
+                    >
                       <input
                         value={pinnedMessage}
                         onChange={(e) => setPinnedMessage(e.target.value)}
@@ -2026,7 +2256,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                         <button onClick={() => setTickerVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Start Ticker</button>
                         <button onClick={() => setTickerVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Stop Ticker</button>
                       </div>
-                    </div>
+                    </CollapsibleSection>
 
                     {cameraSources.length === 0 && (
                       <div className="text-xs text-gray-500 border border-aether-700 rounded p-3 bg-aether-800/40">
@@ -2094,175 +2324,277 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       </div>
 
       {showSettings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-aether-900 border border-aether-700 rounded-xl p-6 w-[520px] shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold flex gap-2"><Settings className="text-aether-500"/> Settings</h2><button onClick={() => setShowSettings(false)}><X className="text-gray-400"/></button></div>
-            <div className="space-y-4">
-              <div className="bg-blue-500/10 border border-blue-500/20 p-4 rounded-lg">
-                  <h4 className="text-sm font-bold text-white mb-2 flex items-center gap-2"><Activity size={16}/> Signaling Diagnostic</h4>
-                  <div className="space-y-1 text-xs text-gray-300">
-                      <p>PeerID: <span className="font-mono text-gray-500">{peerId || 'Generating...'}</span></p>
-                      <p>Room: <span className="font-mono text-gray-500">{roomId}</span></p>
-                      <p>Mode: <span className="font-mono text-gray-500">{peerMode === 'custom' ? 'Custom' : 'Cloud'}</span></p>
-                      <p>Status: <span className={cloudConnected ? "text-green-400" : "text-red-400"}>{cloudConnected ? "Active" : "Disconnected"}</span></p>
-                      <p>Relay: <span className={relayConnected ? "text-green-400" : "text-red-400"}>{relayConnected ? "Online" : "Offline"}</span></p>
-                      {relayStatus && <p>Relay Status: <span className="text-gray-400">{relayStatus}</span></p>}
+        <div className="fixed inset-0 z-50 pointer-events-none">
+          <div
+            ref={settingsPanelRef}
+            style={{ left: settingsPos.x, top: settingsPos.y }}
+            className="pointer-events-auto absolute w-[520px] max-w-[92vw] bg-aether-900 border border-aether-700 rounded-xl shadow-2xl"
+          >
+            <div
+              onMouseDown={startSettingsDrag}
+              className="flex justify-between items-center px-4 py-3 border-b border-aether-800 cursor-move select-none"
+            >
+              <h2 className="text-lg font-bold flex gap-2 items-center text-white">
+                <Settings className="text-aether-500" /> Settings
+              </h2>
+              <button data-no-drag onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-white">
+                <X />
+              </button>
+            </div>
+            <div className="px-4 py-4 space-y-4 max-h-[75vh] overflow-y-auto">
+              <SettingsSection title="Signaling Diagnostic" subtitle="Connection status + health" defaultOpen>
+                <div className="space-y-1 text-xs text-gray-300">
+                  <p>PeerID: <span className="font-mono text-gray-500">{peerId || 'Generating...'}</span></p>
+                  <p>Room: <span className="font-mono text-gray-500">{roomId}</span></p>
+                  <p>Mode: <span className="font-mono text-gray-500">{peerMode === 'custom' ? 'Custom' : 'Cloud'}</span></p>
+                  <p>Status: <span className={cloudConnected ? "text-green-400" : "text-red-400"}>{cloudConnected ? "Active" : "Disconnected"}</span></p>
+                  <p>Relay: <span className={relayConnected ? "text-green-400" : "text-red-400"}>{relayConnected ? "Online" : "Offline"}</span></p>
+                  {relayStatus && <p>Relay Status: <span className="text-gray-400">{relayStatus}</span></p>}
+                </div>
+                <div className="flex gap-2 mt-2">
+                  <button
+                    onClick={checkRelayHealth}
+                    className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200"
+                  >
+                    Relay Check
+                  </button>
+                  <button
+                    onClick={checkFfmpeg}
+                    className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200"
+                  >
+                    FFmpeg Check
+                  </button>
+                </div>
+                <div className="mt-3 bg-aether-800/40 border border-aether-700 rounded p-2 text-[10px] text-gray-300">
+                  <div className="font-semibold text-white mb-1">Stream Health</div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    <span>Bitrate: <span className="text-gray-400">{streamHealth.kbps} kbps</span></span>
+                    <span>Queue: <span className="text-gray-400">{streamHealth.queueKb} KB</span></span>
+                    <span>Drops: <span className="text-gray-400">{streamHealth.drops}</span></span>
+                    <span>RTT: <span className="text-gray-400">{streamHealth.rttMs !== null ? `${streamHealth.rttMs} ms` : "--"}</span></span>
                   </div>
-                  <div className="flex gap-2 mt-3">
-                    <button
-                      onClick={checkRelayHealth}
-                      className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200"
-                    >
-                      Relay Check
-                    </button>
-                    <button
-                      onClick={checkFfmpeg}
-                      className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200"
-                    >
-                      FFmpeg Check
-                    </button>
-                  </div>
-                  <div className="mt-3 bg-aether-800/40 border border-aether-700 rounded p-2 text-[10px] text-gray-300">
-                    <div className="font-semibold text-white mb-1">Stream Health</div>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1">
-                      <span>Bitrate: <span className="text-gray-400">{streamHealth.kbps} kbps</span></span>
-                      <span>Queue: <span className="text-gray-400">{streamHealth.queueKb} KB</span></span>
-                      <span>Drops: <span className="text-gray-400">{streamHealth.drops}</span></span>
-                      <span>RTT: <span className="text-gray-400">{streamHealth.rttMs !== null ? `${streamHealth.rttMs} ms` : "--"}</span></span>
-                    </div>
-                    <div className="text-[9px] text-gray-500 mt-1">Updates while Live. Drops indicate network backpressure.</div>
-                  </div>
-              </div>
-              <div className="bg-aether-800/50 p-4 rounded-lg">
-                 <div className="flex justify-between items-center">
+                  <div className="text-[9px] text-gray-500 mt-1">Updates while Live. Drops indicate network backpressure.</div>
+                </div>
+              </SettingsSection>
+
+              <SettingsSection title="Room Management" subtitle="Force new room if stuck">
+                <div className="flex justify-between items-center">
+                  <div className="text-xs text-gray-400">Reset the room if devices get stuck</div>
+                  <button 
+                    onClick={regenerateRoomId}
+                    className="p-2 bg-red-500/10 text-red-400 hover:bg-red-500/20 rounded-lg text-xs flex items-center gap-1 border border-red-500/20"
+                  >
+                    <RefreshCw size={12} /> Reset Room
+                  </button>
+                </div>
+              </SettingsSection>
+
+              <SettingsSection title="Connection Mode" subtitle="Local, cloud, or custom server" defaultOpen>
+                <div className="text-[10px] text-gray-500 bg-aether-800/40 border border-aether-700 rounded p-2">
+                  <strong>Auto:</strong> Easiest. Uses PeerJS cloud.
+                  <br />
+                  <strong>Local:</strong> Uses your computer at <span className="font-mono">localhost:9000</span>.
+                  <br />
+                  <strong>Advanced:</strong> Use a custom server or VPS.
+                </div>
+                <select
+                  value={peerUiMode}
+                  onChange={(e) => setPeerUiMode(e.target.value as any)}
+                  className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                >
+                  <option value="auto">Auto (Recommended)</option>
+                  <option value="local">Local (This Computer)</option>
+                  <option value="advanced">Advanced (Custom Server)</option>
+                </select>
+                <p className="text-[10px] text-gray-500">
+                  Local uses this computer (localhost:9000). Advanced is for remote or VPS servers.
+                </p>
+
+                {peerUiMode === 'advanced' && (
+                  <div className="space-y-2">
                     <div>
-                        <h4 className="text-sm font-bold text-white mb-1">Room Management</h4>
-                        <p className="text-xs text-gray-400">Force new room if stuck</p>
+                      <label className="text-gray-400 text-sm">Host</label>
+                      <input
+                        type="text"
+                        value={peerHost}
+                        onChange={(e) => setPeerHost(e.target.value)}
+                        placeholder="localhost"
+                        className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                      />
+                      <p className="text-[10px] text-gray-500 mt-1">Example: <span className="font-mono">yourdomain.com</span></p>
                     </div>
-                    <button 
-                        onClick={regenerateRoomId}
-                        className="p-2 bg-red-500/10 text-red-400 hover:bg-red-500/20 rounded-lg text-xs flex items-center gap-1 border border-red-500/20"
-                    >
-                        <RefreshCw size={12} /> Reset Room
-                    </button>
-                 </div>
-              </div>
-
-              <div className="bg-aether-800/50 p-4 rounded-lg space-y-3">
-                 <div>
-                    <h4 className="text-sm font-bold text-white mb-1">Connection Mode</h4>
-                    <p className="text-xs text-gray-400">Simple options for non-technical setup</p>
-                 </div>
-                 <div className="text-[10px] text-gray-500 bg-aether-800/40 border border-aether-700 rounded p-2">
-                   <strong>Auto:</strong> Easiest. Uses PeerJS cloud.
-                   <br />
-                   <strong>Local:</strong> Uses your computer at <span className="font-mono">localhost:9000</span>.
-                   <br />
-                   <strong>Advanced:</strong> Use a custom server or VPS.
-                 </div>
-                 <select
-                    value={peerUiMode}
-                    onChange={(e) => setPeerUiMode(e.target.value as any)}
-                    className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
-                 >
-                    <option value="auto">Auto (Recommended)</option>
-                    <option value="local">Local (This Computer)</option>
-                    <option value="advanced">Advanced (Custom Server)</option>
-                 </select>
-                 <p className="text-[10px] text-gray-500">
-                   Local uses this computer (localhost:9000). Advanced is for remote or VPS servers.
-                 </p>
-
-                 {peerUiMode === 'advanced' && (
-                    <div className="space-y-2">
-                      <div>
-                        <label className="text-gray-400 text-sm">Host</label>
-                        <input
-                          type="text"
-                          value={peerHost}
-                          onChange={(e) => setPeerHost(e.target.value)}
-                          placeholder="localhost"
-                          className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
-                        />
-                        <p className="text-[10px] text-gray-500 mt-1">Example: <span className="font-mono">yourdomain.com</span></p>
-                      </div>
-                      <div>
-                        <label className="text-gray-400 text-sm">Port</label>
-                        <input
-                          type="number"
-                          value={peerPort}
-                          onChange={(e) => setPeerPort(e.target.value)}
-                          placeholder="9000"
-                          className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
-                        />
-                        <p className="text-[10px] text-gray-500 mt-1">Common: 443 (secure), 9000 (local)</p>
-                      </div>
-                      <div>
-                        <label className="text-gray-400 text-sm">Path</label>
-                        <input
-                          type="text"
-                          value={peerPath}
-                          onChange={(e) => setPeerPath(e.target.value)}
-                          placeholder="/peerjs"
-                          className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
-                        />
-                        <p className="text-[10px] text-gray-500 mt-1">Default path is <span className="font-mono">/peerjs</span></p>
-                      </div>
-                      <label className="flex items-center gap-2 text-xs text-gray-300">
-                        <input
-                          type="checkbox"
-                          checked={peerSecure}
-                          onChange={(e) => setPeerSecure(e.target.checked)}
-                        />
-                        Use TLS (wss/https)
-                      </label>
-                      <p className="text-[10px] text-gray-500">
-                        After applying, the app reloads and uses your custom PeerJS server.
-                      </p>
+                    <div>
+                      <label className="text-gray-400 text-sm">Port</label>
+                      <input
+                        type="number"
+                        value={peerPort}
+                        onChange={(e) => setPeerPort(e.target.value)}
+                        placeholder="9000"
+                        className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                      />
+                      <p className="text-[10px] text-gray-500 mt-1">Common: 443 (secure), 9000 (local)</p>
                     </div>
-                 )}
+                    <div>
+                      <label className="text-gray-400 text-sm">Path</label>
+                      <input
+                        type="text"
+                        value={peerPath}
+                        onChange={(e) => setPeerPath(e.target.value)}
+                        placeholder="/peerjs"
+                        className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                      />
+                      <p className="text-[10px] text-gray-500 mt-1">Default path is <span className="font-mono">/peerjs</span></p>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={peerSecure}
+                        onChange={(e) => setPeerSecure(e.target.checked)}
+                      />
+                      Use TLS (wss/https)
+                    </label>
+                    <p className="text-[10px] text-gray-500">
+                      After applying, the app reloads and uses your custom PeerJS server.
+                    </p>
+                  </div>
+                )}
 
-                 <div className="flex justify-between items-center">
-                    <button
-                      onClick={testPeerServer}
-                      className="px-3 py-2 rounded text-xs bg-aether-800 border border-aether-700 hover:bg-aether-700 text-white"
-                    >
-                      Test Connection
-                    </button>
-                    <button
-                      onClick={applyPeerSettings}
-                      className="px-3 py-2 rounded text-xs bg-aether-700 hover:bg-aether-600 text-white"
-                    >
-                      Apply & Reload
-                    </button>
-                 </div>
-              </div>
-              <div>
-                  <label className="text-gray-400 text-sm">Pro License Key</label>
-                  <input 
-                      type="text" 
-                      value={licenseKey} 
-                      onChange={e => setLicenseKey(e.target.value)} 
-                      placeholder="PRO_XXXX-XXXX..."
-                      className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
-                  />
-                  <p className="text-[10px] text-gray-500 mt-1">
-                    {isPro ? <span className="text-green-400">Pro Features Active ✨</span> : "Enter key to remove watermark & unlock AI."}
+                <div className="flex justify-between items-center">
+                  <button
+                    onClick={testPeerServer}
+                    className="px-3 py-2 rounded text-xs bg-aether-800 border border-aether-700 hover:bg-aether-700 text-white"
+                  >
+                    Test Connection
+                  </button>
+                  <button
+                    onClick={applyPeerSettings}
+                    className="px-3 py-2 rounded text-xs bg-aether-700 hover:bg-aether-600 text-white"
+                  >
+                    Apply & Reload
+                  </button>
+                </div>
+              </SettingsSection>
+
+              <SettingsSection title="Pro License" subtitle="Unlock advanced features">
+                <label className="text-gray-400 text-sm">Pro License Key</label>
+                <input 
+                  type="text" 
+                  value={licenseKey} 
+                  onChange={e => setLicenseKey(e.target.value.toUpperCase())} 
+                  placeholder="PRO_XXXX-XXXX..."
+                  className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                />
+                <p className="text-[10px] text-gray-500 mt-1">
+                  {isPro ? <span className="text-green-400">Pro Features Active</span> : "Enter key to remove watermark & unlock AI."}
+                </p>
+                {!isPro && licenseKey.trim() && (
+                  <p className="text-[10px] text-yellow-300">Key format: PRO_XXXX-XXXX or an issued key.</p>
+                )}
+                {licenseStatus.state === 'checking' && (
+                  <p className="text-[10px] text-gray-400">Verifying license…</p>
+                )}
+                {licenseStatus.state === 'valid' && (
+                  <p className="text-[10px] text-green-400">
+                    License verified{licenseStatus.source === 'server' ? ' (server)' : ' (offline)'}.
                   </p>
-              </div>
-              <div>
+                )}
+                {licenseStatus.state === 'invalid' && (
+                  <p className="text-[10px] text-red-300">
+                    {licenseStatus.message || 'License is not valid.'}
+                  </p>
+                )}
+                {licenseStatus.state === 'error' && (
+                  <p className="text-[10px] text-yellow-300">
+                    {licenseStatus.message || 'License server unreachable.'}
+                  </p>
+                )}
+              </SettingsSection>
+
+              {!adminUnlocked && (
+                <SettingsSection title="Admin Access" subtitle="Unlock license tools">
+                  <p className="text-[10px] text-gray-400">Enter admin token to issue licenses.</p>
+                  <input
+                    type="password"
+                    value={adminToken}
+                    onChange={(e) => setAdminToken(e.target.value)}
+                    placeholder="ADMIN_TOKEN"
+                    className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                  />
+                  <div className="text-[10px] text-gray-500">Stored in session only.</div>
+                </SettingsSection>
+              )}
+
+              {adminUnlocked && (
+                <SettingsSection title="Admin: Issue License" subtitle="Generate Pro keys">
+                  {!isAdminByEmail && (
+                    <div className="text-[10px] text-gray-400">Admin token active for this session.</div>
+                  )}
+                  <div className="space-y-2">
+                    <div>
+                      <label className="text-gray-400 text-sm">Customer Email (optional)</label>
+                      <input
+                        value={issueEmail}
+                        onChange={(e) => setIssueEmail(e.target.value)}
+                        placeholder="user@example.com"
+                        className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-gray-400 text-sm">Duration (days)</label>
+                      <input
+                        type="number"
+                        value={issueDays}
+                        onChange={(e) => setIssueDays(Number(e.target.value) || 0)}
+                        className="w-24 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-sm text-white"
+                      />
+                      <span className="text-[10px] text-gray-500">0 = no expiry</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleIssueLicense}
+                        className="px-3 py-2 rounded text-xs bg-aether-700 hover:bg-aether-600 text-white"
+                        disabled={issueStatus.state === 'issuing'}
+                      >
+                        {issueStatus.state === 'issuing' ? 'Issuing…' : 'Issue License'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setAdminToken('');
+                          setIssueStatus({ state: 'idle' });
+                        }}
+                        className="px-3 py-2 rounded text-xs bg-aether-800 border border-aether-700 text-gray-200"
+                      >
+                        Lock Admin
+                      </button>
+                    </div>
+                    {issueStatus.state === 'ok' && issueStatus.key && (
+                      <div className="text-[10px] text-green-400 break-all">
+                        {issueStatus.message} Key copied: {issueStatus.key}
+                      </div>
+                    )}
+                    {issueStatus.state === 'error' && (
+                      <div className="text-[10px] text-red-300">
+                        {issueStatus.message || 'Failed to issue license.'}
+                      </div>
+                    )}
+                  </div>
+                </SettingsSection>
+              )}
+
+              <SettingsSection title="Streaming" subtitle="RTMP + quality controls" defaultOpen>
+                <div>
                   <label className="text-gray-400 text-sm">Stream Key (YouTube/Twitch)</label>
                   <input 
-                      type="password" 
-                      value={streamKey} 
-                      onChange={e => setStreamKey(e.target.value)} 
-                      placeholder="rtmp_key_12345..."
-                      className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                    type="password" 
+                    value={streamKey} 
+                    onChange={e => setStreamKey(e.target.value)} 
+                    placeholder="rtmp_key_12345..."
+                    className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
                   />
                   <p className="text-[10px] text-gray-500 mt-1">Saved locally. Requires local backend running.</p>
-              </div>
+                </div>
 
-              <div className="bg-aether-800/50 p-4 rounded-lg space-y-2">
+                <div className="bg-aether-800/50 p-3 rounded-lg space-y-2">
                   <h4 className="text-sm font-bold text-white mb-1">Multi-Stream Destinations</h4>
                   <p className="text-[10px] text-gray-500">Add extra RTMP targets (Twitch, Facebook, etc.)</p>
                   {destinations.length === 0 && (
@@ -2306,27 +2638,44 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   >
                     Add Destination
                   </button>
-              </div>
-              
-              <div>
+                </div>
+
+                <div>
                   <label className="text-gray-400 text-sm">Stream Quality (Target Bitrate)</label>
                   <select 
-                      value={streamQuality}
-                      onChange={(e) => {
-                          const val = e.target.value as any;
-                          setStreamQuality(val);
-                          localStorage.setItem('aether_stream_quality', val);
-                      }}
-                      className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
+                    value={streamQuality}
+                    onChange={(e) => {
+                      const val = e.target.value as any;
+                      setStreamQuality(val);
+                      localStorage.setItem('aether_stream_quality', val);
+                    }}
+                    disabled={wifiMode}
+                    className={`w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none ${wifiMode ? 'opacity-60 cursor-not-allowed' : ''}`}
                   >
-                      <option value="high">High (6 Mbps - 1080p60)</option>
-                      <option value="medium">Medium (3 Mbps - 1080p30)</option>
-                      <option value="low">Low (1.5 Mbps - 720p30)</option>
+                    <option value="high">High (6 Mbps - 1080p60)</option>
+                    <option value="medium">Medium (3 Mbps - 1080p30)</option>
+                    <option value="low">Low (1.5 Mbps - 720p30)</option>
                   </select>
-                  <p className="text-[10px] text-gray-500 mt-1">Lower this if YouTube complains about "Low Signal" or buffering.</p>
-              </div>
+                  <div className="mt-2 flex items-center justify-between text-[10px] text-gray-400">
+                    <span>Lower this if YouTube complains about "Low Signal" or buffering.</span>
+                    <label className="flex items-center gap-2 text-[10px] text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={wifiMode}
+                        onChange={(e) => setWifiMode(e.target.checked)}
+                      />
+                      Wi-Fi Friendly Mode
+                    </label>
+                  </div>
+                  {wifiMode && (
+                    <p className="text-[10px] text-yellow-300 mt-1">Wi-Fi Mode forces 720p/24fps and lower bitrate for stability.</p>
+                  )}
+                </div>
+              </SettingsSection>
             </div>
-            <div className="flex justify-end gap-3 mt-6"><button onClick={() => setShowSettings(false)} className="px-4 py-2 rounded text-sm bg-aether-500 text-white">Done</button></div>
+            <div className="flex justify-end gap-3 px-4 py-3 border-t border-aether-800 bg-aether-900/80">
+              <button onClick={() => setShowSettings(false)} className="px-4 py-2 rounded text-sm bg-aether-500 text-white">Done</button>
+            </div>
           </div>
         </div>
       )}
