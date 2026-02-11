@@ -3,6 +3,8 @@ const CORE_ASSETS = [
   "/",
   "/index.html",
   "/manifest.json",
+  "/manifest-companion.json",
+  "/companion.html",
   "/icons/icon.svg",
   "/icons/icon-maskable.svg",
 ];

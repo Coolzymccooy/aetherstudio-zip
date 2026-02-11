@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#050b13" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/manifest-companion.json" />
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/icon-maskable.svg" />
+    <title>Aether Studio Companion</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Space Grotesk", system-ui, sans-serif;
+        background: #050b13;
+        color: #e2e8f0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 24px;
+      }
+      .card {
+        max-width: 420px;
+        background: rgba(11, 22, 38, 0.9);
+        border: 1px solid rgba(45, 212, 191, 0.25);
+        border-radius: 18px;
+        padding: 28px;
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0 0 12px;
+      }
+      p {
+        font-size: 14px;
+        color: #94a3b8;
+        margin: 0 0 16px;
+      }
+      a {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 10px 16px;
+        background: linear-gradient(135deg, #2dd4bf, #ff7a45);
+        color: #041014;
+        font-weight: 600;
+        border-radius: 999px;
+        text-decoration: none;
+      }
+      code {
+        display: inline-block;
+        margin-top: 12px;
+        font-size: 12px;
+        color: #e2e8f0;
+        background: rgba(15, 23, 42, 0.6);
+        padding: 6px 10px;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Aether Studio Companion</h1>
+      <p>This page enables a separate companion PWA for phone cameras.</p>
+      <a href="/?mode=companion">Open Companion Mode</a>
+      <code>Install from browser menu: “Add to Home Screen”</code>
+    </div>
+  </body>
+</html>

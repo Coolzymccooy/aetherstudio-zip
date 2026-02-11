@@ -1,0 +1,24 @@
+{
+  "name": "Aether Studio Companion",
+  "short_name": "Aether Cam",
+  "start_url": "/?mode=companion",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#050b13",
+  "theme_color": "#050b13",
+  "orientation": "portrait",
+  "categories": ["video", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/icons/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

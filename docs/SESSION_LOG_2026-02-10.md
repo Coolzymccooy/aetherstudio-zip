@@ -88,10 +88,12 @@ Body: { "email": "...", "days": 365, "plan": "pro" }
 ---
 
 ## PWA Assets
-- `service-worker.js`
-- `manifest.json`
-- `icons/icon.svg`
-- `icons/icon-maskable.svg`
+- `public/service-worker.js`
+- `public/manifest.json`
+- `public/manifest-companion.json`
+- `public/companion.html`
+- `public/icons/icon.svg`
+- `public/icons/icon-maskable.svg`
 
 ---
 
@@ -115,6 +117,7 @@ Body: { "email": "...", "days": 365, "plan": "pro" }
 - License issuing UI (admin only).
 - Licensing endpoints + verification flow.
 - PWA scaffolding.
+- Companion PWA installer page.
 - Visual palette + fonts + background pattern.
 
 ### -- Pending / Next Steps
