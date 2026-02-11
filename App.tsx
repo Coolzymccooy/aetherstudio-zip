@@ -12,6 +12,21 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [rehydrated, setRehydrated] = useState(false);
 
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const body = document.body;
+    if (!body) return;
+    if (view === 'landing') {
+      body.classList.remove('overflow-hidden');
+      body.classList.remove('overscroll-none');
+      body.classList.add('overflow-x-hidden');
+    } else {
+      body.classList.add('overflow-hidden');
+      body.classList.add('overscroll-none');
+      body.classList.remove('overflow-x-hidden');
+    }
+  }, [view]);
+
   // 1. Handle URL Parameters & Deep Linking immediately
   useEffect(() => {
     const handleDeepLinks = () => {

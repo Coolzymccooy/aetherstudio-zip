@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Zap, Circle, ArrowRight, Smartphone, Monitor, Mic, Shield, Play, Menu, X, CheckCircle, Lock, Layers, Radio, ChevronLeft, Loader2, AlertCircle, Terminal, Cpu, PlayCircle } from 'lucide-react';
+import { Zap, Circle, ArrowRight, Smartphone, Monitor, Mic, Shield, Play, Menu, X, CheckCircle, Lock, Layers, Radio, ChevronLeft, Loader2, AlertCircle, Terminal, Cpu, PlayCircle, Camera } from 'lucide-react';
 import { auth } from '../../services/firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, User, signInAnonymously } from 'firebase/auth';
 
@@ -107,7 +107,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
   };
 
   return (
-    <div className="min-h-screen bg-[#05010a] text-white font-sans selection:bg-fuchsia-500 selection:text-white overflow-x-hidden">
+    <div className="min-h-screen bg-[#05010a] text-white font-sans selection:bg-aether-500 selection:text-white overflow-x-hidden">
       
       {/* Navigation */}
       <nav className="fixed top-0 w-full z-50 bg-[#05010a]/80 backdrop-blur-md border-b border-white/5">
@@ -116,10 +116,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
             className="flex items-center gap-2 cursor-pointer group" 
             onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
           >
-            <div className="w-8 h-8 bg-gradient-to-br from-aether-500 to-fuchsia-500 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(217,70,239,0.5)] group-hover:shadow-[0_0_25px_rgba(217,70,239,0.8)] transition-all">
+            <div className="w-8 h-8 bg-gradient-to-br from-aether-500 to-aether-accent rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(45,212,191,0.45)] group-hover:shadow-[0_0_25px_rgba(45,212,191,0.7)] transition-all">
                <Zap className="text-white fill-current" size={18} />
             </div>
-            <span className="text-xl font-bold tracking-tight">Aether<span className="font-light text-fuchsia-400">Studio</span></span>
+            <span className="text-xl font-bold tracking-tight">Aether<span className="font-light text-aether-accent">Studio</span></span>
           </div>
 
           <div className="hidden md:flex items-center gap-8 text-sm font-medium text-gray-400">
@@ -131,7 +131,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
                     {onDevBypass && (
                         <button 
                             onClick={handleDevBypass}
-                            className="text-fuchsia-400 hover:text-fuchsia-300 transition-colors flex items-center gap-1 text-xs uppercase font-bold tracking-wider"
+                            className="text-aether-accent hover:text-aether-accent transition-colors flex items-center gap-1 text-xs uppercase font-bold tracking-wider"
                         >
                             <PlayCircle size={14} /> Quick Start
                         </button>
@@ -149,7 +149,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
                      <span className="text-xs text-gray-500 truncate max-w-[150px]">{user.email || 'Dev User'}</span>
                      <button 
                         onClick={onEnterStudio}
-                        className="bg-gradient-to-r from-aether-500 to-fuchsia-500 text-white px-5 py-2 rounded-full hover:opacity-90 transition-opacity font-bold flex items-center gap-2 shadow-lg shadow-fuchsia-500/20"
+                        className="bg-gradient-to-r from-aether-500 to-aether-accent text-white px-5 py-2 rounded-full hover:opacity-90 transition-opacity font-bold flex items-center gap-2 shadow-lg shadow-aether-accent/20"
                     >
                         <Zap size={16} fill="currentColor" /> Enter Studio
                     </button>
@@ -163,33 +163,48 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
       <section className="relative pt-32 pb-20 md:pt-48 md:pb-32 px-6 overflow-hidden">
         {/* Background Gradients */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[600px] bg-aether-600/30 rounded-full blur-[120px] pointer-events-none" />
-        <div className="absolute bottom-0 right-0 w-[800px] h-[600px] bg-fuchsia-600/10 rounded-full blur-[120px] pointer-events-none" />
+        <div className="absolute bottom-0 right-0 w-[800px] h-[600px] bg-aether-accent/10 rounded-full blur-[120px] pointer-events-none" />
 
         <div className="max-w-5xl mx-auto text-center relative z-10">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs font-mono tracking-widest text-gray-400 mb-6 uppercase">
-              <Cpu size={12} className="text-fuchsia-500" /> Tech by Tiwaton
+              <Cpu size={12} className="text-aether-accent" /> Tiwaton Tech
           </div>
 
           <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-8 leading-tight">
             The Streaming Studio <br/>
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-aether-400 via-white to-fuchsia-300 animate-gradient">From The Future.</span>
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-aether-400 via-white to-aether-accent animate-gradient">From The Future.</span>
           </h1>
-          <p className="text-lg md:text-xl text-gray-400 max-w-2xl mx-auto mb-10 leading-relaxed">
-            Combine the power of OBS, the convenience of Camo, and the intelligence of AI. 
-            No expensive hardware required. Just your browser and your creativity.
+            <p className="text-lg md:text-xl text-gray-400 max-w-2xl mx-auto mb-6 leading-relaxed">
+            A full broadcast studio in your browser: multi-cam switching, phone cameras,
+            live graphics, and AI-assisted production. Ship fast, go live confidently.
           </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-10">
+            {[
+              { label: "Broadcast", value: "YouTube + Twitch RTMP", desc: "Go live with relay-based streaming." },
+              { label: "Multi-Cam", value: "Local + Phone Inputs", desc: "Add multiple cameras instantly." },
+              { label: "Scenes", value: "Presets + Transitions", desc: "Switch layouts with one click." },
+              { label: "AI Studio", value: "Backgrounds + Assistant", desc: "Generate visuals and ideas." },
+            ].map((item) => (
+              <div key={item.label} className="rounded-2xl border border-white/10 bg-white/5 p-4 text-left">
+                <div className="text-[10px] uppercase tracking-widest text-gray-400">{item.label}</div>
+                <div className="text-base font-semibold text-white mt-1">{item.value}</div>
+                <div className="text-xs text-gray-400 mt-1">{item.desc}</div>
+              </div>
+            ))}
+          </div>
           
           <div className="flex flex-col md:flex-row items-center justify-center gap-4">
             <button 
                 onClick={onOpenMobileMode}
                 className="md:hidden w-full max-w-xs px-8 py-4 rounded-full bg-white text-black font-bold text-lg hover:bg-gray-200 transition-colors shadow-[0_0_20px_rgba(255,255,255,0.3)] flex items-center justify-center gap-2 mb-2 animate-in slide-in-from-bottom-4 fade-in duration-700"
             >
-                <Smartphone size={24} className="text-fuchsia-600" /> Use Phone as Camera
+                <Smartphone size={24} className="text-aether-accent" /> Use Phone as Camera
             </button>
 
             <button 
                 onClick={handleMainAction}
-                className="px-8 py-4 rounded-full bg-gradient-to-r from-aether-600 to-fuchsia-600 text-white font-bold text-lg hover:scale-105 transition-transform shadow-[0_0_30px_rgba(217,70,239,0.3)] flex items-center gap-2"
+                className="px-8 py-4 rounded-full bg-gradient-to-r from-aether-500 to-aether-accent text-white font-bold text-lg hover:scale-105 transition-transform shadow-[0_0_30px_rgba(45,212,191,0.3)] flex items-center gap-2"
             >
                 {user ? 'Return to Studio' : 'Start Streaming Now'} <ArrowRight size={20} />
             </button>
@@ -217,10 +232,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
                          <Smartphone size={24} />
                      </div>
                      <h3 className="text-xl font-bold mb-2">Wireless Mobile Cam</h3>
-                     <p className="text-gray-400 text-sm">Turn your phone into a 4K webcam with zero latency. No cables, no drivers.</p>
+                     <p className="text-gray-400 text-sm">Turn your phone into a roaming camera with clean pairing and stable connection.</p>
                  </div>
                  <div className="bg-white/5 p-8 rounded-2xl border border-white/10 hover:border-aether-500/50 transition-colors">
-                     <div className="w-12 h-12 bg-aether-900 rounded-lg flex items-center justify-center mb-4 text-fuchsia-400">
+                     <div className="w-12 h-12 bg-aether-900 rounded-lg flex items-center justify-center mb-4 text-aether-accent">
                          <Layers size={24} />
                      </div>
                      <h3 className="text-xl font-bold mb-2">Browser Compositor</h3>
@@ -231,10 +246,78 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
                          <Shield size={24} />
                      </div>
                      <h3 className="text-xl font-bold mb-2">AI-Powered Audio</h3>
-                     <p className="text-gray-400 text-sm">Tech by Tiwaton algorithms remove background noise instantly.</p>
+                     <p className="text-gray-400 text-sm">Noise suppression and clean output for pro-grade voice clarity.</p>
                  </div>
              </div>
          </div>
+      </section>
+
+      <section id="capabilities" className="py-24 bg-[#05010a] border-t border-white/5">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl font-bold mb-4">Built for Real Production</h2>
+            <p className="text-gray-400">Aether Studio handles multi-input, live graphics, and seamless delivery.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            {[
+              { title: "Multi-Camera Inputs", desc: "Add local webcams, capture cards, and multiple phones at once." },
+              { title: "Instant Live Switching", desc: "Cut between cameras with transitions and scene presets." },
+              { title: "Live Overlays", desc: "Lower thirds, pinned messages, and ticker graphics." },
+              { title: "Stream Health", desc: "Relay checks, FFmpeg checks, and live bitrate monitoring." },
+              { title: "AI Studio Tools", desc: "Generate backgrounds and get quick production suggestions." },
+              { title: "PWA Ready", desc: "Install on desktop and mobile for focused, app-like use." },
+            ].map((item) => (
+              <div key={item.title} className="rounded-2xl border border-white/10 bg-white/5 p-6">
+                <h3 className="text-lg font-semibold text-white mb-2">{item.title}</h3>
+                <p className="text-sm text-gray-400">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Mini Demo Flow */}
+      <section id="flow" className="py-20 bg-[#0a0212] border-t border-white/5">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="text-center mb-14">
+            <h2 className="text-3xl font-bold mb-4">Launch in 3 Steps</h2>
+            <p className="text-gray-400">A simple flow that gets you from setup to live in minutes.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {[
+              {
+                step: "01",
+                title: "Add Cameras",
+                desc: "Connect local webcams and phones. Assign your main shot.",
+                icon: <Camera size={22} />,
+              },
+              {
+                step: "02",
+                title: "Design the Scene",
+                desc: "Apply overlays, lower thirds, and choose a layout preset.",
+                icon: <Layers size={22} />,
+              },
+              {
+                step: "03",
+                title: "Go Live",
+                desc: "Send your feed to YouTube or Twitch with health monitoring.",
+                icon: <Radio size={22} />,
+              },
+            ].map((item) => (
+              <div key={item.step} className="rounded-2xl border border-white/10 bg-white/5 p-6 relative overflow-hidden">
+                <div className="absolute -top-8 -right-8 w-24 h-24 rounded-full bg-aether-accent/10 blur-2xl" />
+                <div className="flex items-center gap-3 mb-4 text-aether-400">
+                  <div className="w-10 h-10 rounded-xl bg-aether-900 border border-white/10 flex items-center justify-center text-aether-400">
+                    {item.icon}
+                  </div>
+                  <span className="text-xs font-mono tracking-widest text-gray-500">{item.step}</span>
+                </div>
+                <h3 className="text-lg font-semibold text-white mb-2">{item.title}</h3>
+                <p className="text-sm text-gray-400">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
       </section>
 
       {/* How it Works Section */}
@@ -269,8 +352,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
                  <Smartphone size={16} /> Companion App
              </button>
         </div>
-        <p className="mb-2">&copy; 2024 Aether Studio. All rights reserved.</p>
-        <p className="text-xs font-mono opacity-50 uppercase tracking-widest">Engineered by Tiwaton Technologies</p>
+        <p className="mb-2">&copy; 2026 Tiwaton Tech. All rights reserved.</p>
+        <p className="text-xs font-mono opacity-50 uppercase tracking-widest">Engineered by Tiwaton Tech</p>
       </footer>
 
       {/* Auth Modal */}
@@ -280,7 +363,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
               <button onClick={closeAuthModal} className="absolute top-4 right-4 text-gray-500 hover:text-white"><X size={20} /></button>
               
               <div className="mb-6 text-center">
-                 <div className="w-12 h-12 bg-gradient-to-br from-aether-500 to-fuchsia-500 rounded-lg flex items-center justify-center shadow-lg mx-auto mb-4">
+                 <div className="w-12 h-12 bg-gradient-to-br from-aether-500 to-aether-accent rounded-lg flex items-center justify-center shadow-lg mx-auto mb-4">
                     {authMode === 'waitlist' || authMode === 'forgot' ? <Lock className="text-white" /> : <Zap className="text-white fill-current" />}
                  </div>
                  <h2 className="text-2xl font-bold">{getModalTitle()}</h2>
@@ -313,7 +396,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
                             required
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
-                            className="w-full bg-white/5 border border-white/10 rounded-lg p-3 text-white focus:border-fuchsia-500 outline-none"
+                            className="w-full bg-white/5 border border-white/10 rounded-lg p-3 text-white focus:border-aether-500 outline-none"
                         />
                     </div>
                     
@@ -325,12 +408,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
                                 required
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
-                                className="w-full bg-white/5 border border-white/10 rounded-lg p-3 text-white focus:border-fuchsia-500 outline-none"
+                                className="w-full bg-white/5 border border-white/10 rounded-lg p-3 text-white focus:border-aether-500 outline-none"
                             />
                         </div>
                     )}
 
-                    <button disabled={isAuthLoading} className="w-full bg-gradient-to-r from-aether-600 to-fuchsia-600 text-white font-bold py-3 rounded-lg hover:brightness-110 transition-all flex items-center justify-center gap-2">
+                    <button disabled={isAuthLoading} className="w-full bg-gradient-to-r from-aether-500 to-aether-accent text-white font-bold py-3 rounded-lg hover:brightness-110 transition-all flex items-center justify-center gap-2">
                         {isAuthLoading && <Loader2 className="animate-spin" size={16} />}
                         {authMode === 'signin' ? 'Sign In' : authMode === 'signup' ? 'Create Account' : authMode === 'forgot' ? 'Send Reset Link' : 'Join List'}
                     </button>

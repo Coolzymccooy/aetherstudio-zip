@@ -30,7 +30,7 @@ export const AudioMixer: React.FC<AudioMixerProps> = ({ tracks, onUpdateTrack, o
   }, [tracks]);
 
   return (
-    <div className="bg-aether-800 border-t border-aether-700 p-4 h-48 overflow-y-auto">
+    <div className="bg-aether-800 border-t border-aether-700 p-4 h-40 md:h-48 overflow-y-auto">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wider flex items-center gap-2">
           <Activity size={16} className="text-aether-400" /> Audio Mixer

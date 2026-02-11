@@ -83,8 +83,23 @@ export const generateStudioBackground = async (prompt: string): Promise<string |
     throw new Error(text || `AI image error (${res.status})`);
   }
 
-  const json = await res.json();
-  return json?.image || null;
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const json = await res.json().catch(() => ({}));
+    return json?.image || null;
+  }
+
+  const text = await res.text().catch(() => "");
+  if (!text) return null;
+  if (text.trim().startsWith("data:image/")) {
+    return text.trim();
+  }
+  try {
+    const json = JSON.parse(text);
+    return json?.image || null;
+  } catch {
+    throw new Error(text || "AI image response invalid");
+  }
 };
 
 export const askStudioAssistant = async (query: string): Promise<string> => {

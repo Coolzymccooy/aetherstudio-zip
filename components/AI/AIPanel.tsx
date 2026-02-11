@@ -58,6 +58,8 @@ export const AIPanel: React.FC<AIPanelProps> = ({ onAddLayer }) => {
         setError("AI backend not available. Please start your AI server or configure VITE_AI_BASE_URL.");
       } else if (msg.includes('403') || msg.toLowerCase().includes('permission denied')) {
         setError("Permission denied. You may need to select a paid project API Key.");
+      } else if (msg) {
+        setError(`AI error: ${msg}`);
       } else {
         setError("An unexpected error occurred during generation.");
       }

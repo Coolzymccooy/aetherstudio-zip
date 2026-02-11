@@ -1909,7 +1909,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
   // --- RENDER ---
   return (
-    <div className="fixed inset-0 flex flex-col w-full bg-aether-900/95 text-gray-200 font-sans selection:bg-aether-500 selection:text-white relative overflow-hidden">
+    <div className="fixed inset-0 flex flex-col w-full bg-aether-900/95 text-gray-200 font-sans selection:bg-aether-500 selection:text-white relative overflow-x-hidden overflow-y-auto">
       <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
       
       {statusMsg && (
@@ -2039,7 +2039,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden flex-col md:flex-row">
+      <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:flex-row">
         <aside className="w-16 hidden md:flex flex-col items-center py-6 gap-6 border-r border-aether-700 bg-aether-800/50">
            <SourceButton icon={<Camera size={24} />} label="Camera" onClick={() => setShowDeviceSelector(true)} />
            <SourceButton icon={<Smartphone size={24} />} label="Mobile" onClick={createPhoneSource} />
@@ -2048,7 +2048,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
            <SourceButton icon={<Type size={24} />} label="Text" onClick={addTextLayer} />
            <SourceButton icon={<HelpCircle size={24} />} label="Help" onClick={() => setShowHelpModal(true)} />
         </aside>
-        <main className="flex-1 flex flex-col relative bg-aether-900/80 overflow-hidden">
+        <main className="flex-1 min-h-0 flex flex-col relative bg-aether-900/80 overflow-hidden">
           <div className="flex-1 p-4 md:p-8 flex items-center justify-center">
             <CanvasStage 
                 layers={layers} 
@@ -2066,7 +2066,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             onOpenSettings={openMicPicker}
           />
         </main>
-        <div className="w-full md:w-80 md:border-l border-aether-700 bg-aether-900 flex flex-col">
+        <div className="w-full md:w-80 md:border-l border-aether-700 bg-aether-900 flex flex-col min-h-0">
             <div className="flex border-b border-aether-700">
                 <button onClick={() => setRightPanelTab('properties')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'properties' ? 'bg-aether-800 text-white' : 'text-gray-500'}`}><Sliders size={14} /> Properties</button>
                 <button onClick={() => setRightPanelTab('inputs')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'inputs' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Camera size={14} /> Inputs</button>
@@ -2407,7 +2407,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   <option value="advanced">Advanced (Custom Server)</option>
                 </select>
                 <p className="text-[10px] text-gray-500">
-                  Local uses this computer (localhost:9000). Advanced is for remote or VPS servers.
+                  Local uses this computer (localhost:9000) and requires a PeerJS server running on that machine. Advanced is for remote or VPS servers.
                 </p>
 
                 {peerUiMode === 'advanced' && (
@@ -2529,6 +2529,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   {!isAdminByEmail && (
                     <div className="text-[10px] text-gray-400">Admin token active for this session.</div>
                   )}
+                  <div className="text-[10px] text-gray-500">
+                    Requires <span className="font-mono">LICENSE_SECRET</span> and <span className="font-mono">LICENSE_ADMIN_TOKEN</span> on the relay.
+                  </div>
                   <div className="space-y-2">
                     <div>
                       <label className="text-gray-400 text-sm">Customer Email (optional)</label>
