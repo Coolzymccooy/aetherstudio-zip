@@ -408,23 +408,23 @@ wss.on("connection", (ws, req) => {
 
               // VIDEO (High Quality / YouTube Standard - Matched to OBS "Excellent" Settings)
               "-c:v", "libx264",
-              "-preset", "veryfast",     // CPU-friendly but better quality than ultrafast
+              "-preset", "superfast",    // Changed from veryfast to superfast to reduce CPU load while maintaining 1080p
               "-tune", "zerolatency",
               "-profile:v", "high",
               "-level", "4.1",
-              "-vf", "scale=1920:1080",  // Full 1080p (matches your OBS canvas)
+              "-vf", "scale=1920:1080",
               "-pix_fmt", "yuv420p",
-              "-r", "30",                // 30 FPS stable
+              "-r", "30",
               "-g", "60",                // 2-second keyframe interval (Critical for YouTube)
               "-keyint_min", "60",
               "-sc_threshold", "0",
-              "-b:v", "4500k",           // 4500 kbps (YouTube recommended for 1080p)
-              "-maxrate", "4500k",       // Cap bitrate to prevent fluctuations
-              "-bufsize", "9000k",       // 2x buffer for smooth playback
+              "-b:v", "4500k",
+              "-maxrate", "4500k",
+              "-bufsize", "9000k",
 
               // AUDIO (High Fidelity)
               "-c:a", "aac",
-              "-b:a", "160k",            // 160kbps (Standard clear audio)
+              "-b:a", "128k",            // Slightly reduced to ensure audio stability
               "-ar", "44100",
               "-af", "aresample=async=1", // Prevent audio timestamp drift
 
