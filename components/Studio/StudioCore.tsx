@@ -1214,8 +1214,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     const preferred = 'video/webm;codecs=vp8,opus';
     const qualitySettings = {
       high: { v: 6_000_000, a: 192_000, fps: 30 },
-      medium: { v: 2_500_000, a: 128_000, fps: 30 },
-      low: { v: 1_000_000, a: 64_000, fps: 24 }
+      medium: { v: 6_000_000, a: 160_000, fps: 30 }, // Upgraded to 6Mbps per recommendation
+      low: { v: 2_500_000, a: 128_000, fps: 30 }
     };
 
     const wifiQuality = { v: 900_000, a: 64_000, fps: 24 };
