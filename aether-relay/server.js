@@ -406,26 +406,35 @@ wss.on("connection", (ws, req) => {
               "-f", "webm",
               "-i", "pipe:0",
 
-              // VIDEO (High Quality / YouTube Standard - Matched to OBS "Excellent" Settings)
+              // VIDEO (Cloud-Optimized 1080p for Standard Instances)
               "-c:v", "libx264",
-              "-preset", "superfast",    // Changed from veryfast to superfast to reduce CPU load while maintaining 1080p
-              "-tune", "zerolatency",
-              "-profile:v", "high",
+              "-preset", "superfast",     // Low CPU usage (Essential for cloud)
+              "-tune", "zerolatency",     // Minimize delay
+              "-profile:v", "main",       // 'main' is safer than 'high' for cloud relay compatibility
               "-level", "4.1",
-              "-vf", "scale=1920:1080",
+              
+              "-vf", "scale=1920:1080",   // Full HD
               "-pix_fmt", "yuv420p",
-              "-r", "30",
-              "-g", "60",                // 2-second keyframe interval (Critical for YouTube)
-              "-keyint_min", "60",
-              "-sc_threshold", "0",
-              "-b:v", "4500k",
-              "-maxrate", "4500k",
-              "-bufsize", "9000k",
+              "-r", "30",                 // 30 FPS Lock
+              "-g", "60",                 // 2-sec keyframe (Required by YouTube)
+              
+              // BITRATE CONTROL (CBR - Constant Bitrate)
+              // We force 4000k to ensure stability over perfection
+              "-b:v", "4000k",
+              "-maxrate", "4000k",
+              "-minrate", "4000k",
+              "-bufsize", "8000k",        // 2x buffer to absorb network jitter
 
-              // AUDIO (High Fidelity)
+              // AUDIO
               "-c:a", "aac",
-              "-b:a", "128k",            // Slightly reduced to ensure audio stability
+              "-b:a", "128k",
               "-ar", "44100",
+              "-af", "aresample=async=1", // Keep audio in sync even if frames drop
+
+              // OUTPUT PROTOCOL (RTMP Hardening)
+              "-f", "flv",
+              "-flvflags", "no_duration_filesize", // Prevents header issues with YouTube
+              rtmp,
               "-af", "aresample=async=1", // Prevent audio timestamp drift
 
               // OUTPUT
