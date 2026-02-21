@@ -402,13 +402,14 @@ wss.on("connection", (ws, req) => {
               [
               "-loglevel", "warning",
               
-              // INPUT
+              // INPUT - HARDENED FOR NETWORK DROPS
               "-f", "webm",
+              "-re",                     // Read input at native frame rate (prevents racing ahead)
               "-i", "pipe:0",
 
               // VIDEO (Cloud-Optimized 1080p for Standard Instances)
               "-c:v", "libx264",
-              "-preset", "superfast",     // Low CPU usage (Essential for cloud)
+              "-preset", "superfast",    // Low CPU usage (Essential for cloud)
               "-tune", "zerolatency",     // Minimize delay
               "-profile:v", "main",       // 'main' is safer than 'high' for cloud relay compatibility
               "-level", "4.1",
@@ -418,12 +419,14 @@ wss.on("connection", (ws, req) => {
               "-r", "30",                 // 30 FPS Lock
               "-g", "60",                 // 2-sec keyframe (Required by YouTube)
               
+              // RESILIENCE (The "OBS-Like" Stability)
+              "-max_muxing_queue_size", "9999", // Don't crash if buffer fills
+              
               // BITRATE CONTROL (CBR - Constant Bitrate)
-              // We force 4000k to ensure stability over perfection
               "-b:v", "4000k",
               "-maxrate", "4000k",
               "-minrate", "4000k",
-              "-bufsize", "8000k",        // 2x buffer to absorb network jitter
+              "-bufsize", "8000k",        // 2x buffer
 
               // AUDIO
               "-c:a", "aac",
@@ -433,7 +436,7 @@ wss.on("connection", (ws, req) => {
 
               // OUTPUT PROTOCOL (RTMP Hardening)
               "-f", "flv",
-              "-flvflags", "no_duration_filesize", // Prevents header issues with YouTube
+              "-flvflags", "no_duration_filesize", 
               rtmp,
               "-af", "aresample=async=1", // Prevent audio timestamp drift
 
