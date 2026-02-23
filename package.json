@@ -2,13 +2,22 @@
   "name": "aether-studio",
   "private": true,
   "version": "0.0.0",
+  "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "peer": "node server/peer.cjs",
-    "dev:all": "concurrently -k \"vite\" \"node server/signaling.cjs\" \"node server/peer.cjs\""
+    "relay": "node aether-relay/server.js",
+    "dev:all": "concurrently -k \"vite\" \"node aether-relay/server.js\" \"node server/peer.cjs\"",
+    "desktop": "powershell -NoProfile -Command \"Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; electron electron/main.cjs\"",
+    "desktop:dev": "concurrently -k \"npm run dev -- --host 0.0.0.0 --port 5174\" \"npm run desktop\"",
+    "desktop:clean": "powershell -NoProfile -Command \"$ports=5174,8080,9000; foreach($p in $ports){$cons=Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue; if($cons){$cons | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } catch {} }}}; Get-Process electron -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue\"",
+    "desktop:bundle": "npm run build && electron-packager . \"Aether Studio\" --platform=win32 --arch=x64 --out=release --overwrite --prune=true --ignore=\"^/release$\" --ignore=\"^/.git$\" --ignore=\"^/.local-run$\"",
+    "desktop:zip": "powershell -NoProfile -Command \"$src='release/Aether Studio-win32-x64'; $zip='release/AetherStudio-win32-x64.zip'; if(!(Test-Path $src)){ throw 'Run npm run desktop:bundle first.' }; if(Test-Path $zip){ Remove-Item $zip -Force }; Compress-Archive -Path (Join-Path $src '*') -DestinationPath $zip\"",
+    "desktop:dist": "npm run desktop:bundle && npm run desktop:zip",
+    "desktop:dist:installer": "npm run build && electron-builder --win nsis portable"
   },
   "dependencies": {
     "@google/genai": "^1.33.0",
@@ -27,8 +36,51 @@
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.2.0",
+    "electron": "^40.6.0",
+    "electron-builder": "^26.0.12",
+    "electron-packager": "^17.1.2",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "vite-plugin-mkcert": "^1.17.9"
+  },
+  "build": {
+    "appId": "com.tiwaton.aetherstudio",
+    "productName": "Aether Studio",
+    "asar": true,
+    "asarUnpack": [
+      "tools/**"
+    ],
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "aether-relay/**/*",
+      "server/**/*",
+      "tools/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "AetherStudio-${version}-${arch}-${target}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

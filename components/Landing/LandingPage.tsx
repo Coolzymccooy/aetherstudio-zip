@@ -22,6 +22,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
   
   // FIX: Track if we just performed a login action to auto-redirect once user state propagates
   const [justLoggedIn, setJustLoggedIn] = useState(false);
+  const desktopDownloadUrl = ((import.meta.env.VITE_DESKTOP_DOWNLOAD_URL as string | undefined) || '').trim();
 
   useEffect(() => {
     // Only enter studio if we have a user AND we just finished the login flow
@@ -128,6 +129,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
             
             {!user ? (
                 <>
+                    {desktopDownloadUrl && (
+                        <a
+                            href={desktopDownloadUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hover:text-white transition-colors"
+                        >
+                            Download App
+                        </a>
+                    )}
                     {onDevBypass && (
                         <button 
                             onClick={handleDevBypass}
@@ -214,6 +225,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
             >
                 Join Waiting List
             </button>
+            {desktopDownloadUrl && (
+              <a
+                href={desktopDownloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-8 py-4 rounded-full border border-aether-500/40 bg-aether-500/10 text-aether-accent font-medium text-lg hover:bg-aether-500/20 transition-colors backdrop-blur-sm flex items-center gap-2"
+              >
+                <Download size={18} /> Download Desktop App
+              </a>
+            )}
           </div>
         </div>
       </section>
@@ -265,7 +286,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
               { title: "Live Overlays", desc: "Lower thirds, pinned messages, and ticker graphics." },
               { title: "Stream Health", desc: "Relay checks, FFmpeg checks, and live bitrate monitoring." },
               { title: "AI Studio Tools", desc: "Generate backgrounds and get quick production suggestions." },
-              { title: "PWA Ready", desc: "Install on desktop and mobile for focused, app-like use." },
+              { title: "Desktop App", desc: "Install native Windows app with built-in relay and local Peer server." },
             ].map((item) => (
               <div key={item.title} className="rounded-2xl border border-white/10 bg-white/5 p-6">
                 <h3 className="text-lg font-semibold text-white mb-2">{item.title}</h3>

@@ -6,15 +6,20 @@
 
 This contains everything you need to run your app locally.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1ZrgVteCWi3Wo_T_R1NaQ90G_9dgzEX2W
-
 ## Run Locally
 
 **Prerequisites:**  Node.js
 
-
 1. Install dependencies:
    `npm install`
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+3. Run frontend only:
    `npm run dev`
+4. Run full local stack (frontend + relay + peer server):
+   `npm run dev:all`
+
+## Relay Operations
+
+- Active relay implementation: `aether-relay/server.js`
+- Compatibility shim only: `server/signaling.cjs` (deprecated)
+- Operations guide: `docs/RELAY_OPERATIONS.md`

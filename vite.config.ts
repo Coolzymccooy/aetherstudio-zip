@@ -15,13 +15,13 @@ export default defineConfig(({ mode }) => {
         host: "192.168.0.22", // ✅ helps HMR not bind to localhost only
         port: 5173,
       },
-      allowedHosts: true,
+      allowedHosts: ["localhost", "127.0.0.1", ".trycloudflare.com"],
     },
     preview: {
       host: "0.0.0.0",
       port: 5173,
       strictPort: true,
-      allowedHosts: true,
+      allowedHosts: ["localhost", "127.0.0.1", ".trycloudflare.com"],
     },
     resolve: {
       alias: {

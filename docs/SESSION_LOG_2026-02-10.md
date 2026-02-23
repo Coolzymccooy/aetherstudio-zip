@@ -109,7 +109,7 @@ Body: { "email": "...", "days": 365, "plan": "pro" }
 - `components/AI/AIPanel.tsx`
 - `services/geminiService.ts`
 - `services/licenseService.ts`
-- `server/signaling.cjs`
+- `server/signaling.cjs` (historical; now deprecated shim)
 - `aether-relay/server.js`
 - `index.html`
 - `manifest.json`
@@ -182,3 +182,55 @@ Body: { "email": "...", "days": 365, "plan": "pro" }
 ---
 
 If you want me to continue with **Stripe integration** or **mobile layout upgrades**, say which to prioritize.
+
+---
+
+## Update (2026-02-23)
+
+### Goal
+- Complete deterministic relay hardening.
+- Stabilize local and desktop streaming path.
+- Add distributable desktop app workflow and download entry on landing page.
+
+### Completed today
+- Streaming/relay hardening:
+  - Unified relay usage to `aether-relay/server.js`.
+  - Added relay utilities and tests.
+  - Added `/health` and `/ffmpeg` diagnostics expansion.
+  - Added bounded restart/backoff and congestion signaling.
+  - Added destination normalization and tee fanout isolation behavior.
+- Studio encoder/bootstrap hardening:
+  - Chunk-gated `start-stream` flow.
+  - Recorder start guard, first-chunk timeout, fallback stages.
+  - Persistent fatal messages for root-cause visibility.
+  - Added encoder bootstrap diagnostics in settings.
+- Multi-phone reliability polish:
+  - Added max phone slot guard (`VITE_MAX_PHONE_CAMS`, default 4).
+  - Added per-source call tracking to prevent overlapping call conflicts.
+  - Improved reconnect/disconnect cleanup for stream/layer/audio state.
+- Desktop runtime:
+  - Added Electron main/preload runtime with single-instance lock.
+  - Added local defaults for peer/relay setup.
+  - Added LAN mobile base URL auto-population for QR phone onboarding.
+  - Allowed Virtual Cable popup window in desktop runtime.
+- Distribution:
+  - Added desktop scripts:
+    - `desktop:bundle`
+    - `desktop:zip`
+    - `desktop:dist`
+    - `desktop:dist:installer` (optional, environment-dependent)
+  - Added docs:
+    - `docs/DESKTOP_LOCAL_RUNBOOK.md`
+    - `docs/DESKTOP_DISTRIBUTION.md`
+  - Landing page now supports a download CTA via `VITE_DESKTOP_DOWNLOAD_URL`.
+
+### Verification status
+- `npm --prefix aether-relay test`: pass.
+- `npm run build`: pass.
+- Desktop bundle produced:
+  - `release/Aether Studio-win32-x64/Aether Studio.exe`
+  - `release/AetherStudio-win32-x64.zip`
+
+### Operational note
+- `npm run desktop:zip` can take several minutes due archive size (~400MB+).
+- Installer builds via `electron-builder` may fail on Windows without symlink privileges; `desktop:bundle` and `desktop:zip` are the stable path.

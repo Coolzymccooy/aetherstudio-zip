@@ -13,19 +13,43 @@ import { auth } from '../../services/firebase';
 import { verifyLicenseKey, issueLicenseKey } from '../../services/licenseService';
 import { signOut, User } from 'firebase/auth';
 import { generateRoomId, getCleanPeerId } from '../../utils/peerId';
-import Peer, { DataConnection } from "peerjs";
+import Peer, { DataConnection, MediaConnection } from "peerjs";
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
+const MAX_PHONE_CAMS = (() => {
+  const raw = Number((import.meta as any).env?.VITE_MAX_PHONE_CAMS ?? 4);
+  if (!Number.isFinite(raw) || raw < 1) return 4;
+  return Math.floor(raw);
+})();
 
 interface StudioProps {
   user: User;
   onBack: () => void;
 }
 
-const SourceButton: React.FC<{ icon: React.ReactNode; label: string; onClick: () => void }> = ({ icon, label, onClick }) => (
+type StreamQualityPreset = 'high' | 'medium' | 'low';
+type StudioStatusMsg = {
+  type: 'error' | 'info' | 'warn';
+  text: string;
+  persistent?: boolean;
+};
+type EncoderBootstrapStats = {
+  recorderState: string;
+  firstChunkReceived: boolean;
+  chunksSent: number;
+  zeroSizeChunks: number;
+  firstChunkDelayMs: number | null;
+};
+
+const SourceButton: React.FC<{ icon: React.ReactNode; label: string; onClick: () => void; disabled?: boolean }> = ({ icon, label, onClick, disabled }) => (
   <button
     onClick={onClick}
-    className="group relative p-3 rounded-xl text-gray-400 hover:text-white hover:bg-aether-700/50 transition-all flex items-center justify-center"
+    disabled={disabled}
+    className={`group relative p-3 rounded-xl transition-all flex items-center justify-center ${
+      disabled
+        ? 'text-gray-600 cursor-not-allowed opacity-50'
+        : 'text-gray-400 hover:text-white hover:bg-aether-700/50'
+    }`}
   >
     {icon}
     <div className="absolute left-14 top-1/2 -translate-y-1/2 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 border border-white/10 backdrop-blur-sm">
@@ -125,19 +149,26 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [issueEmail, setIssueEmail] = useState(() => user?.email || '');
   const [issueDays, setIssueDays] = useState(365);
   const [issueStatus, setIssueStatus] = useState<{ state: 'idle' | 'issuing' | 'ok' | 'error'; message?: string; key?: string }>({ state: 'idle' });
-  const [streamQuality, setStreamQuality] = useState<'high' | 'medium' | 'low'>(() => (localStorage.getItem('aether_stream_quality') as any) || 'medium');
+  const [streamQuality, setStreamQuality] = useState<StreamQualityPreset>(() => (localStorage.getItem('aether_stream_quality') as any) || 'medium');
   const [wifiMode, setWifiMode] = useState(() => localStorage.getItem('aether_wifi_mode') === 'true');
   const [desktopConnected, setDesktopConnected] = useState(false);
   const [relayConnected, setRelayConnected] = useState(false);
   const [relayStatus, setRelayStatus] = useState<string | null>(null);
   const [peerId, setPeerId] = useState<string>('');
   const [isRecording, setIsRecording] = useState(false);
-  const [statusMsg, setStatusMsg] = useState<{type: 'error' | 'info' | 'warn', text: string} | null>(null);
+  const [statusMsg, setStatusMsg] = useState<StudioStatusMsg | null>(null);
   const [streamHealth, setStreamHealth] = useState<{ kbps: number; drops: number; rttMs: number | null; queueKb: number }>({
     kbps: 0,
     drops: 0,
     rttMs: null,
     queueKb: 0,
+  });
+  const [encoderBootstrap, setEncoderBootstrap] = useState<EncoderBootstrapStats>({
+    recorderState: 'inactive',
+    firstChunkReceived: false,
+    chunksSent: 0,
+    zeroSizeChunks: 0,
+    firstChunkDelayMs: null,
   });
 
   type CameraSourceKind = 'local' | 'phone';
@@ -261,9 +292,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamingSocketRef = useRef<WebSocket | null>(null);
   const peerRef = useRef<Peer | null>(null);
+  const cameraSourcesRef = useRef<CameraSource[]>([]);
   const cloudDisconnectTimerRef = useRef<number | null>(null);
   const cloudSyncTimerRef = useRef<number | null>(null);
   const mobileMetaRef = useRef<Map<string, { sourceId?: string; label?: string }>>(new Map());
+  const phoneCallsRef = useRef<Map<string, MediaConnection>>(new Map());
   const phonePendingTimersRef = useRef<Map<string, number>>(new Map());
   const lowerThirdIdsRef = useRef<{ nameId?: string; titleId?: string }>({});
   const pinnedLayerIdRef = useRef<string | null>(null);
@@ -275,6 +308,14 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const streamHealthRef = useRef<{ bytes: number; drops: number; lastTs: number }>({ bytes: 0, drops: 0, lastTs: Date.now() });
   const streamHealthTimerRef = useRef<number | null>(null);
   const relayPingTimerRef = useRef<number | null>(null);
+  const liveQualityRef = useRef<StreamQualityPreset>(streamQuality);
+  const qualityDowngradeInFlightRef = useRef(false);
+  const congestionWindowStartRef = useRef<number | null>(null);
+  const congestionWarningShownRef = useRef(false);
+  const encoderRetryInFlightRef = useRef(false);
+  const encoderChunkStateRef = useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
+  const encoderStartAtRef = useRef<number | null>(null);
+  const pendingStartRef = useRef<{ streamKey: string; destinations: string[]; sent: boolean; sentAt: number | null } | null>(null);
 
   // --- EFFECTS ---
   const clampSettingsPos = useCallback((x: number, y: number) => {
@@ -288,6 +329,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       y: Math.min(Math.max(8, y), maxY),
     };
   }, []);
+
+  useEffect(() => {
+    cameraSourcesRef.current = cameraSources;
+  }, [cameraSources]);
 
   const handleSettingsDrag = useCallback((e: MouseEvent) => {
     const drag = settingsDragRef.current;
@@ -372,6 +417,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   }, [wifiMode]);
 
   useEffect(() => {
+    liveQualityRef.current = streamQuality;
+  }, [streamQuality]);
+
+  useEffect(() => {
       localStorage.setItem('aether_auto_director', String(autoDirectorOn));
       localStorage.setItem('aether_auto_director_interval', String(autoDirectorInterval || 12));
   }, [autoDirectorOn, autoDirectorInterval]);
@@ -406,7 +455,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
   // Status Message Auto-Dismiss
   useEffect(() => {
-    if (statusMsg) {
+    if (statusMsg && !statusMsg.persistent) {
       const timer = setTimeout(() => setStatusMsg(null), 5000);
       return () => clearTimeout(timer);
     }
@@ -472,6 +521,14 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     if (streamStatus !== StreamStatus.LIVE) {
       setStreamHealth((prev) => ({ ...prev, kbps: 0, drops: 0, queueKb: 0 }));
       streamHealthRef.current = { bytes: 0, drops: 0, lastTs: Date.now() };
+      congestionWindowStartRef.current = null;
+      congestionWarningShownRef.current = false;
+      qualityDowngradeInFlightRef.current = false;
+      encoderRetryInFlightRef.current = false;
+      encoderChunkStateRef.current = { count: 0, lastAt: 0 };
+      pendingStartRef.current = null;
+      encoderStartAtRef.current = null;
+      resetEncoderBootstrap('inactive');
       return;
     }
 
@@ -760,27 +817,59 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
         peer.on("call", (call) => {
             setStatusMsg({ type: "info", text: "Mobile Camera Incoming..." });
-            call.answer();
-            call.on("stream", (remoteStream) => {
+            const getSourceMeta = () => {
                 const metaFromCall: any = (call as any).metadata || {};
                 const metaFromConn = mobileMetaRef.current.get(call.peer) || {};
-                const sourceId = metaFromCall.sourceId || metaFromConn.sourceId || generateId();
+                const sourceId = metaFromCall.sourceId || metaFromConn.sourceId;
                 const label = metaFromCall.label || metaFromConn.label || "Phone Cam";
+                return { sourceId, label };
+            };
+            const registerSourceCall = (sourceId?: string) => {
+                if (!sourceId) return;
+                const existing = phoneCallsRef.current.get(sourceId);
+                if (existing && existing !== call) {
+                    try { existing.close(); } catch {}
+                }
+                phoneCallsRef.current.set(sourceId, call);
+            };
+            const markSourceDisconnected = (sourceId?: string) => {
+                if (!sourceId) return;
+                const activeCall = phoneCallsRef.current.get(sourceId);
+                if (activeCall && activeCall !== call) return;
+                phoneCallsRef.current.delete(sourceId);
+                setCameraSources(prev => prev.map((s) => {
+                  if (s.id !== sourceId) return s;
+                  if (s.stream) {
+                    try { s.stream.getTracks().forEach((t) => t.stop()); } catch {}
+                  }
+                  return { ...s, status: 'failed', stream: undefined, peerId: undefined };
+                }));
+                setLayers(prev => {
+                  const source = cameraSourcesRef.current.find((s) => s.id === sourceId);
+                  if (!source?.layerId) return prev;
+                  return prev.map((l) => l.id === source.layerId ? { ...l, src: undefined } : l);
+                });
+                setAudioTracks(prev => prev.map((t) => t.id === `mobile-mic-${sourceId}` ? { ...t, stream: undefined, muted: true } : t));
+            };
+            const initialMeta = getSourceMeta();
+            registerSourceCall(initialMeta.sourceId);
+            call.answer();
+            call.on("stream", (remoteStream) => {
+                const meta = getSourceMeta();
+                const sourceId = meta.sourceId || generateId();
+                const label = meta.label;
+                registerSourceCall(sourceId);
                 handleMobileStream(remoteStream, sourceId, label, call.peer);
             });
             call.on("close", () => {
-                const metaFromConn = mobileMetaRef.current.get(call.peer) || {};
-                const sourceId = metaFromConn.sourceId;
-                if (sourceId) {
-                  setCameraSources(prev => prev.map(s => s.id === sourceId ? { ...s, status: 'failed' } : s));
-                }
+                const meta = getSourceMeta();
+                markSourceDisconnected(meta.sourceId);
+                mobileMetaRef.current.delete(call.peer);
             });
             call.on("error", () => {
-                const metaFromConn = mobileMetaRef.current.get(call.peer) || {};
-                const sourceId = metaFromConn.sourceId;
-                if (sourceId) {
-                  setCameraSources(prev => prev.map(s => s.id === sourceId ? { ...s, status: 'failed' } : s));
-                }
+                const meta = getSourceMeta();
+                markSourceDisconnected(meta.sourceId);
+                mobileMetaRef.current.delete(call.peer);
             });
         });
     }
@@ -812,7 +901,34 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     const wsUrl = getRelayWsUrl();
 
     const connectRelay = () => {
-        if (!wsUrl) return;
+        if (!wsUrl) {
+            setRelayConnected(false);
+            setRelayStatus("Relay URL not configured");
+            return;
+        }
+        const pageIsHttps = window.location.protocol === "https:";
+        const pageHost = window.location.hostname;
+        const pageIsLocal = pageHost === "localhost" || pageHost === "127.0.0.1";
+        if (pageIsHttps && wsUrl.startsWith("ws://")) {
+            setRelayConnected(false);
+            setRelayStatus("Invalid relay URL for HTTPS page");
+            setStatusMsg({
+              type: "error",
+              text: "Relay URL uses ws:// on an HTTPS page. Use wss:// relay URL, or run the app locally at http://localhost:5174.",
+              persistent: true,
+            });
+            return;
+        }
+        if (!pageIsLocal && /^(ws|wss):\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(wsUrl)) {
+            setRelayConnected(false);
+            setRelayStatus("Local relay URL cannot be used from deployed app");
+            setStatusMsg({
+              type: "error",
+              text: "You are on a deployed app host, but relay URL points to localhost. Use local app for local relay, or set public wss relay URL.",
+              persistent: true,
+            });
+            return;
+        }
         try {
             ws = new WebSocket(wsUrl);
             streamingSocketRef.current = ws;
@@ -840,6 +956,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                 setRelayConnected(false);
                 setRelayStatus(`Relay closed (${ev.code})`);
                 setStreamHealth((prev) => ({ ...prev, rttMs: null }));
+                if (ev.code === 4001) {
+                  setStatusMsg({ type: 'warn', text: "Another Studio host tab is active for this room. This tab will stay disconnected." });
+                  liveIntentRef.current = false;
+                  return;
+                }
                 if (liveIntentRef.current) {
                     setStatusMsg({ type: 'warn', text: "Relay lost. Attempting to reconnect..." });
                 }
@@ -861,7 +982,44 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                         return;
                     }
                     if (msg?.type === "started") setRelayStatus("Relay streaming");
-                    if (msg?.type === "error") setRelayStatus(`Relay error: ${msg.error || "unknown"}`);
+                    if (msg?.type === "ffmpeg_restarting") {
+                      setRelayStatus(`Relay restarting (attempt ${msg?.attempt || "?"})`);
+                    }
+                    if (msg?.type === "ffmpeg_error") {
+                      setRelayStatus(`Relay ffmpeg warning: ${msg?.message || "unknown"}`);
+                    }
+                    if (msg?.type === "relay_congestion") {
+                      if (msg?.level === "hard") {
+                        setRelayStatus("Relay congestion hard limit reached");
+                        setStatusMsg({ type: "error", text: "Relay congestion exceeded hard limit. Stream stopping." });
+                      } else if (msg?.level === "soft") {
+                        setRelayStatus("Relay congestion detected");
+                      } else if (msg?.level === "recovered") {
+                        setRelayStatus("Relay congestion recovered");
+                      }
+                    }
+                    if (msg?.type === "destination_status" && (msg?.status === "degraded" || msg?.status === "down")) {
+                      const target = msg?.target ? ` (${msg.target})` : "";
+                      setRelayStatus(`Destination ${msg.status}${target}`);
+                    }
+                    if (msg?.type === "relay_fatal") {
+                      applyRelayFatalStatus(msg?.reason);
+                      return;
+                    }
+                    if (msg?.type === "error") {
+                      const errorCode = String(msg?.error || "unknown");
+                      if (errorCode === "not_active_host") {
+                        setRelayStatus("Relay error: not_active_host");
+                        setStatusMsg({
+                          type: "error",
+                          text: "Another tab/session owns this room.",
+                          persistent: true,
+                        });
+                        liveIntentRef.current = false;
+                        return;
+                      }
+                      setRelayStatus(`Relay error: ${errorCode}`);
+                    }
                 } catch {}
             };
         } catch {}
@@ -874,6 +1032,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         if (cloudDisconnectTimerRef.current) clearTimeout(cloudDisconnectTimerRef.current);
         if (cloudSyncTimerRef.current) clearInterval(cloudSyncTimerRef.current);
         if (relayRetryTimer) clearTimeout(relayRetryTimer);
+        phoneCallsRef.current.forEach((call) => {
+          try { call.close(); } catch {}
+        });
+        phoneCallsRef.current.clear();
+        mobileMetaRef.current.clear();
         
         try { ws?.close(); } catch {}
         
@@ -888,12 +1051,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   // --- HELPER FUNCTIONS ---
 
   const handleMobileStream = (stream: MediaStream, sourceId: string, label: string, peerId?: string) => {
-      const existingSource = cameraSources.find(s => s.id === sourceId);
+      const existingSource = cameraSourcesRef.current.find(s => s.id === sourceId);
       let layerId = existingSource?.layerId;
       const pendingTimer = phonePendingTimersRef.current.get(sourceId);
       if (pendingTimer) {
         window.clearTimeout(pendingTimer);
         phonePendingTimersRef.current.delete(sourceId);
+      }
+      if (existingSource?.stream && existingSource.stream !== stream) {
+        try { existingSource.stream.getTracks().forEach((t) => t.stop()); } catch {}
       }
 
       setLayers(prev => {
@@ -924,9 +1090,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
          if (idx >= 0) {
            const next = [...prev];
            next[idx] = { ...next[idx], label, status: 'live', stream, layerId, peerId };
+           cameraSourcesRef.current = next;
            return next;
          }
-         return [...prev, { id: sourceId, kind: 'phone', label, status: 'live', stream, layerId, peerId }];
+         const next = [...prev, { id: sourceId, kind: 'phone', label, status: 'live', stream, layerId, peerId }];
+         cameraSourcesRef.current = next;
+         return next;
        });
 
        const micId = `mobile-mic-${sourceId}`;
@@ -1064,11 +1233,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       activeCanvasRef.current = canvas;
   };
 
-  const getMixedStream = () => {
+  const getMixedStream = (fps: number = 30, includeAudio: boolean = true) => {
     if (!activeCanvasRef.current) return null;
-    const canvasStream = activeCanvasRef.current.captureStream(30);
-    const audioStream = audioDestination.current?.stream;
-    return new MediaStream([...canvasStream.getVideoTracks(), ...(audioStream ? audioStream.getAudioTracks() : [])]);
+    const canvasStream = activeCanvasRef.current.captureStream(fps);
+    const audioTracks = includeAudio ? (audioDestination.current?.stream.getAudioTracks() || []) : [];
+    return new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
   };
 
   const openVirtualCable = () => {
@@ -1161,18 +1330,89 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     }
   };
 
+  const applyStreamQuality = (quality: StreamQualityPreset) => {
+    setStreamQuality(quality);
+    localStorage.setItem('aether_stream_quality', quality);
+  };
+
+  const getNextLowerQuality = (quality: StreamQualityPreset): StreamQualityPreset | null => {
+    if (quality === 'high') return 'medium';
+    if (quality === 'medium') return 'low';
+    return null;
+  };
+
   const buildMulticastDestinations = () => {
     const enabled = destinations.filter(d => d.enabled && d.url.trim()).map(d => d.url.trim());
     return enabled;
   };
 
-  const startStreamingSession = async (opts?: { fromReconnect?: boolean; forceRestart?: boolean }) => {
+  const sendRelayCommand = (payload: Record<string, unknown>) => {
+    const socket = streamingSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+
+    const relayToken = import.meta.env.VITE_RELAY_TOKEN;
+    const message: Record<string, unknown> = { ...payload };
+    if (relayToken && !Object.prototype.hasOwnProperty.call(message, 'token')) {
+      message.token = relayToken;
+    }
+
+    try {
+      socket.send(JSON.stringify(message));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  function resetEncoderBootstrap(recorderState: string = 'inactive') {
+    setEncoderBootstrap({
+      recorderState,
+      firstChunkReceived: false,
+      chunksSent: 0,
+      zeroSizeChunks: 0,
+      firstChunkDelayMs: null,
+    });
+  }
+
+  function applyRelayFatalStatus(reasonRaw: unknown, fallbackText?: string) {
+    const reason = String(reasonRaw || '').trim() || 'unknown_relay_fatal';
+    const reasonMap: Record<string, string> = {
+      no_input_data_from_encoder: "Browser encoder produced no media data.",
+      no_input_data: "Browser encoder produced no media data.",
+      not_active_host: "Another tab/session owns this room.",
+    };
+    const text = reasonMap[reason] || fallbackText || `Relay fatal: ${reason}`;
+    setRelayStatus(`Relay fatal: ${reason}`);
+    setStatusMsg({ type: "error", text, persistent: true });
+    liveIntentRef.current = false;
+    qualityDowngradeInFlightRef.current = false;
+    congestionWindowStartRef.current = null;
+    congestionWarningShownRef.current = false;
+    encoderRetryInFlightRef.current = false;
+    encoderChunkStateRef.current = { count: 0, lastAt: 0 };
+    pendingStartRef.current = null;
+    encoderStartAtRef.current = null;
+    resetEncoderBootstrap('inactive');
+    try { mediaRecorderRef.current?.stop(); } catch {}
+    setStreamStatus(StreamStatus.IDLE);
+  }
+
+  const startStreamingSession = async (opts?: {
+    fromReconnect?: boolean;
+    forceRestart?: boolean;
+    qualityOverride?: StreamQualityPreset;
+    compatibilityMode?: boolean;
+    videoOnly?: boolean;
+    fallbackStage?: number;
+  }) => {
     if (audioContext.current?.state === 'suspended') {
       await audioContext.current.resume();
     }
 
     const cleanKey = streamKey.trim();
     if (!cleanKey) {
+      pendingStartRef.current = null;
+      setRelayStatus("Missing stream key.");
       if (!opts?.fromReconnect) {
         setStatusMsg({ type: 'error', text: "No Stream Key Set! Check Settings." });
         setShowSettings(true);
@@ -1181,90 +1421,380 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     }
 
     if (!relayConnected && !opts?.fromReconnect) {
+      pendingStartRef.current = null;
+      setRelayStatus("Relay offline.");
       setStatusMsg({ type: 'error', text: "Relay Offline. Wait for relay to connect." });
       return;
     }
 
-    const combinedStream = getMixedStream();
-    if (!combinedStream) {
-      setStatusMsg({ type: 'error', text: "Initialization Error. Refresh page." });
-      return;
-    }
-
     const destinationsList = buildMulticastDestinations();
-
-    if (streamingSocketRef.current && streamingSocketRef.current.readyState === WebSocket.OPEN) {
-      streamingSocketRef.current.send(JSON.stringify({
-        type: 'start-stream',
+    pendingStartRef.current = {
+      streamKey: cleanKey,
+      destinations: destinationsList,
+      sent: false,
+      sentAt: null,
+    };
+    const sendStartStreamCommand = () => {
+      const pending = pendingStartRef.current || {
         streamKey: cleanKey,
         destinations: destinationsList,
-        token: import.meta.env.VITE_RELAY_TOKEN
-      }));
-    }
+        sent: false,
+        sentAt: null,
+      };
+      const sent = sendRelayCommand({
+        type: 'start-stream',
+        streamKey: pending.streamKey,
+        destinations: pending.destinations,
+      });
+      if (sent) {
+        pending.sent = true;
+        pending.sentAt = Date.now();
+        pendingStartRef.current = pending;
+      }
+      return sent;
+    };
+    const sendStopStreamCommand = () => sendRelayCommand({ type: 'stop-stream' });
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording' && !opts?.forceRestart) {
-      setStreamStatus(StreamStatus.LIVE);
-      return;
+      const encoderHealthy =
+        encoderChunkStateRef.current.count > 0 &&
+        Date.now() - encoderChunkStateRef.current.lastAt < 4000;
+      if (encoderHealthy) {
+        const sent = sendStartStreamCommand();
+        if (!sent) {
+          setRelayStatus("Relay start command pending: socket not open.");
+        }
+        setStreamStatus(StreamStatus.LIVE);
+        return;
+      }
+      try { mediaRecorderRef.current.stop(); } catch {}
     }
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try { mediaRecorderRef.current.stop(); } catch {}
     }
 
-    const preferred = 'video/webm;codecs=vp8,opus';
-    const qualitySettings = {
-      high: { v: 6_000_000, a: 192_000, fps: 30 },
-      medium: { v: 6_000_000, a: 160_000, fps: 30 }, // Upgraded to 6Mbps per recommendation
-      low: { v: 2_500_000, a: 128_000, fps: 30 }
+    const chosenQuality = opts?.qualityOverride || streamQuality;
+    if (!wifiMode) {
+      liveQualityRef.current = chosenQuality;
+    }
+    const qualitySettings: Record<StreamQualityPreset, { v: number; a: number; fps: number }> = {
+      high: { v: 3_000_000, a: 160_000, fps: 30 },
+      medium: { v: 2_200_000, a: 128_000, fps: 30 },
+      low: { v: 1_200_000, a: 96_000, fps: 30 },
     };
 
     const wifiQuality = { v: 900_000, a: 64_000, fps: 24 };
-    const effectiveQuality = wifiMode ? wifiQuality : qualitySettings[streamQuality];
+    const effectiveQuality = wifiMode ? wifiQuality : qualitySettings[chosenQuality];
     const { v: vBits, a: aBits, fps } = effectiveQuality;
+    const fallbackStage = Math.max(0, Number(opts?.fallbackStage || 0));
+    const forceVideoOnly = !!opts?.videoOnly || fallbackStage >= 2;
 
-    const options = MediaRecorder.isTypeSupported(preferred)
-      ? { mimeType: preferred, videoBitsPerSecond: vBits, audioBitsPerSecond: aBits }
-      : { mimeType: 'video/webm', videoBitsPerSecond: vBits, audioBitsPerSecond: aBits };
+    const combinedStream = getMixedStream(fps, !forceVideoOnly);
+    if (!combinedStream || combinedStream.getVideoTracks().length === 0) {
+      setRelayStatus("No canvas video track available.");
+      setStatusMsg({ type: 'error', text: "Initialization Error. Refresh page." });
+      return;
+    }
 
-    const streamToRecord = activeCanvasRef.current
-      ? new MediaStream([
-          ...activeCanvasRef.current.captureStream(fps).getVideoTracks(),
-          ...(audioDestination.current?.stream.getAudioTracks() || [])
-        ])
-      : combinedStream;
+    const mimeCandidates =
+      fallbackStage <= 0
+        ? ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm', '']
+        : fallbackStage === 1
+          ? ['video/webm', '']
+          : [''];
+    const selectedMime = mimeCandidates.find((mime) => !mime || MediaRecorder.isTypeSupported(mime)) || '';
+    const recorderOptions: MediaRecorderOptions = {
+      videoBitsPerSecond: vBits,
+    };
+    if (!forceVideoOnly) {
+      recorderOptions.audioBitsPerSecond = aBits;
+    }
+    if (selectedMime) {
+      recorderOptions.mimeType = selectedMime;
+    }
 
-    const recorder = new MediaRecorder(streamToRecord, options);
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(combinedStream, recorderOptions);
+    } catch (err: any) {
+      const message = err?.message || "Unable to start browser encoder.";
+      setStatusMsg({ type: 'error', text: message });
+      setRelayStatus(`Browser encoder failed to start: ${message}`);
+      return;
+    }
 
-    recorder.ondataavailable = (e) => {
-      const socket = streamingSocketRef.current;
-      if (socket?.readyState === WebSocket.OPEN) {
-        if (socket.bufferedAmount > 256 * 1024) {
-          streamHealthRef.current.drops += 1;
-          setStatusMsg({ type: 'warn', text: "Network congestion: Dropping frames!" });
-          return;
-        }
-        if (e.data.size > 0) {
-          streamHealthRef.current.bytes += e.data.size;
-          socket.send(e.data);
-        }
+    const SOFT_BUFFER_BYTES = 2 * 1024 * 1024;
+    const HARD_BUFFER_BYTES = 8 * 1024 * 1024;
+    const SUSTAINED_CONGESTION_MS = 5000;
+    const STALE_CHUNK_MS = 7000;
+    const NO_CHUNK_BOOTSTRAP_MS = 8000;
+    const RECORDER_START_DEADLINE_MS = 1200;
+    let receivedAnyChunk = false;
+    let relayStartSent = false;
+    let requestDataTimer: number | null = null;
+    let noChunkTimer: number | null = null;
+    let staleChunkTimer: number | null = null;
+    let recorderStateTimer: number | null = null;
+
+    encoderChunkStateRef.current = { count: 0, lastAt: 0 };
+    encoderStartAtRef.current = null;
+    resetEncoderBootstrap('initializing');
+
+    const clearRecorderTimers = () => {
+      if (requestDataTimer) {
+        window.clearInterval(requestDataTimer);
+        requestDataTimer = null;
+      }
+      if (noChunkTimer) {
+        window.clearTimeout(noChunkTimer);
+        noChunkTimer = null;
+      }
+      if (staleChunkTimer) {
+        window.clearInterval(staleChunkTimer);
+        staleChunkTimer = null;
+      }
+      if (recorderStateTimer) {
+        window.clearTimeout(recorderStateTimer);
+        recorderStateTimer = null;
       }
     };
 
-    recorder.start(1000);
+    const requestAutoQualityStepDown = () => {
+      if (wifiMode) return;
+      if (qualityDowngradeInFlightRef.current) return;
+      const currentQuality = liveQualityRef.current;
+      const nextQuality = getNextLowerQuality(currentQuality);
+      if (!nextQuality) return;
+
+      qualityDowngradeInFlightRef.current = true;
+      liveQualityRef.current = nextQuality;
+      applyStreamQuality(nextQuality);
+      setStatusMsg({ type: 'warn', text: `Network congestion detected. Switching to ${nextQuality} quality.` });
+
+      void startStreamingSession({
+        fromReconnect: true,
+        forceRestart: true,
+        qualityOverride: nextQuality,
+        compatibilityMode: opts?.compatibilityMode,
+      }).finally(() => {
+        qualityDowngradeInFlightRef.current = false;
+        congestionWindowStartRef.current = null;
+        congestionWarningShownRef.current = false;
+      });
+    };
+
+    const stopWithEncoderFatal = (message: string, reason: string = "no_input_data_from_encoder") => {
+      liveIntentRef.current = false;
+      setRelayStatus(`Relay fatal: ${reason}`);
+      setStatusMsg({ type: 'error', text: message, persistent: true });
+      encoderRetryInFlightRef.current = false;
+      pendingStartRef.current = null;
+      encoderStartAtRef.current = null;
+      try { recorder.stop(); } catch {}
+      sendStopStreamCommand();
+      setStreamStatus(StreamStatus.IDLE);
+    };
+
+    const restartEncoderWithFallback = (reasonText: string) => {
+      if (encoderRetryInFlightRef.current) return true;
+      if (fallbackStage >= 2) return false;
+      encoderRetryInFlightRef.current = true;
+      const nextStage = fallbackStage + 1;
+      const nextVideoOnly = nextStage >= 2;
+      const modeText = nextVideoOnly ? "video-only mode" : "compatibility mode";
+      setStatusMsg({ type: 'warn', text: `${reasonText}. Retrying with ${modeText}...` });
+      void startStreamingSession({
+        fromReconnect: true,
+        forceRestart: true,
+        qualityOverride: 'low',
+        compatibilityMode: nextStage >= 1,
+        videoOnly: nextVideoOnly,
+        fallbackStage: nextStage,
+      });
+      return true;
+    };
+
+    recorder.onstart = () => {
+      clearRecorderTimers();
+      encoderStartAtRef.current = Date.now();
+      setEncoderBootstrap({
+        recorderState: recorder.state || 'recording',
+        firstChunkReceived: false,
+        chunksSent: 0,
+        zeroSizeChunks: 0,
+        firstChunkDelayMs: null,
+      });
+
+      requestDataTimer = window.setInterval(() => {
+        if (recorder.state === 'recording') {
+          try { recorder.requestData(); } catch {}
+        }
+      }, 1000);
+
+      noChunkTimer = window.setTimeout(() => {
+        if (receivedAnyChunk || recorder.state !== 'recording' || !liveIntentRef.current) return;
+        if (restartEncoderWithFallback("No encoder chunks yet")) {
+          return;
+        }
+        stopWithEncoderFatal("No media data from browser encoder. Stream stopped.");
+      }, NO_CHUNK_BOOTSTRAP_MS);
+
+      staleChunkTimer = window.setInterval(() => {
+        if (recorder.state !== 'recording' || !liveIntentRef.current) return;
+        const chunkState = encoderChunkStateRef.current;
+        if (chunkState.count <= 0) return;
+        const msSinceLastChunk = Date.now() - chunkState.lastAt;
+        if (msSinceLastChunk < STALE_CHUNK_MS) return;
+        if (restartEncoderWithFallback("Encoder stalled")) {
+          return;
+        }
+        stopWithEncoderFatal("Browser encoder stalled. Stream stopped.");
+      }, 2000);
+    };
+
+    recorder.onerror = (ev: any) => {
+      clearRecorderTimers();
+      const message = ev?.error?.message || "browser_encoder_error";
+      setEncoderBootstrap((prev) => ({ ...prev, recorderState: 'error' }));
+      setRelayStatus(`Browser encoder error: ${message}`);
+      setStatusMsg({ type: 'error', text: `Browser encoder error: ${message}`, persistent: true });
+    };
+
+    recorder.onstop = () => {
+      clearRecorderTimers();
+      setEncoderBootstrap((prev) => ({ ...prev, recorderState: 'inactive' }));
+    };
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size <= 0) {
+        setEncoderBootstrap((prev) => ({
+          ...prev,
+          zeroSizeChunks: prev.zeroSizeChunks + 1,
+        }));
+        return;
+      }
+
+      const isFirstChunk = !receivedAnyChunk;
+      receivedAnyChunk = true;
+      encoderRetryInFlightRef.current = false;
+      encoderChunkStateRef.current = {
+        count: encoderChunkStateRef.current.count + 1,
+        lastAt: Date.now(),
+      };
+      if (isFirstChunk) {
+        const startedAt = encoderStartAtRef.current;
+        setEncoderBootstrap((prev) => ({
+          ...prev,
+          firstChunkReceived: true,
+          firstChunkDelayMs: startedAt ? Math.max(0, Date.now() - startedAt) : null,
+        }));
+      }
+
+      const socket = streamingSocketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        setRelayStatus("Relay start command pending: socket not open.");
+        return;
+      }
+
+      if (!relayStartSent) {
+        relayStartSent = sendStartStreamCommand();
+      }
+      if (!relayStartSent) {
+        setRelayStatus("Relay start command pending: socket not open.");
+        return;
+      }
+
+      const buffered = socket.bufferedAmount;
+      if (buffered >= HARD_BUFFER_BYTES) {
+        streamHealthRef.current.drops += 1;
+        if (!wifiMode && liveQualityRef.current !== 'low') {
+          requestAutoQualityStepDown();
+          return;
+        }
+        liveIntentRef.current = false;
+        setRelayStatus("Browser upload queue exceeded hard limit.");
+        setStatusMsg({ type: 'error', text: "Upload congestion too high. Stream stopped to recover." });
+        try { recorder.stop(); } catch {}
+        sendStopStreamCommand();
+        setStreamStatus(StreamStatus.IDLE);
+        return;
+      }
+
+      if (buffered >= SOFT_BUFFER_BYTES) {
+        const now = Date.now();
+        if (!congestionWindowStartRef.current) {
+          congestionWindowStartRef.current = now;
+        }
+        if (!congestionWarningShownRef.current) {
+          congestionWarningShownRef.current = true;
+          setStatusMsg({ type: 'warn', text: "Network congestion detected. Stabilizing..." });
+        }
+        if (now - congestionWindowStartRef.current >= SUSTAINED_CONGESTION_MS) {
+          requestAutoQualityStepDown();
+        }
+      } else {
+        congestionWindowStartRef.current = null;
+        congestionWarningShownRef.current = false;
+      }
+
+      streamHealthRef.current.bytes += e.data.size;
+      try {
+        socket.send(e.data);
+        setEncoderBootstrap((prev) => ({
+          ...prev,
+          chunksSent: prev.chunksSent + 1,
+        }));
+      } catch {}
+    };
+
+    try {
+      recorder.start(500);
+    } catch (err: any) {
+      clearRecorderTimers();
+      pendingStartRef.current = null;
+      encoderStartAtRef.current = null;
+      const message = err?.message || "Unable to start browser encoder.";
+      setRelayStatus(`Browser encoder failed to start: ${message}`);
+      setStatusMsg({ type: 'error', text: `Browser encoder failed to start: ${message}`, persistent: true });
+      liveIntentRef.current = false;
+      setStreamStatus(StreamStatus.IDLE);
+      return;
+    }
+
+    recorderStateTimer = window.setTimeout(() => {
+      if (!liveIntentRef.current) return;
+      if (recorder.state === 'recording') return;
+      if (restartEncoderWithFallback("Encoder failed to enter recording state")) {
+        return;
+      }
+      stopWithEncoderFatal("Browser encoder failed to start recording.");
+    }, RECORDER_START_DEADLINE_MS);
+
     mediaRecorderRef.current = recorder;
+    const encoderMode = forceVideoOnly ? "video-only" : (fallbackStage > 0 ? "compat" : "normal");
+    setRelayStatus(`Browser encoder active (${encoderMode}${selectedMime ? `, ${selectedMime}` : ""})`);
+    setEncoderBootstrap((prev) => ({ ...prev, recorderState: recorder.state || "starting" }));
     setStreamStatus(StreamStatus.LIVE);
   };
 
   const toggleLive = async () => {
     if (streamStatus === StreamStatus.LIVE) {
       liveIntentRef.current = false;
+      qualityDowngradeInFlightRef.current = false;
+      congestionWindowStartRef.current = null;
+      congestionWarningShownRef.current = false;
+      encoderRetryInFlightRef.current = false;
+      encoderChunkStateRef.current = { count: 0, lastAt: 0 };
+      pendingStartRef.current = null;
+      encoderStartAtRef.current = null;
       if (mediaRecorderRef.current) mediaRecorderRef.current.stop();
-      if (streamingSocketRef.current && streamingSocketRef.current.readyState === WebSocket.OPEN) {
-          streamingSocketRef.current.send(JSON.stringify({ type: 'stop-stream' }));
-      }
+      sendRelayCommand({ type: 'stop-stream' });
       setStreamStatus(StreamStatus.IDLE);
     } else {
+      setStatusMsg(null);
       liveIntentRef.current = true;
+      encoderRetryInFlightRef.current = false;
       if (!cloudConnected) {
         const hasPhones = cameraSources.some(s => s.kind === 'phone');
         if (hasPhones) {
@@ -1296,11 +1826,14 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
   const canStartLive = (relayConnected === true) && streamKey.trim().length > 0;
   const canToggleLive = streamStatus === StreamStatus.LIVE || canStartLive;
+  const phoneSourceCount = cameraSources.filter((s) => s.kind === 'phone').length;
+  const phoneSlotsFull = phoneSourceCount >= MAX_PHONE_CAMS;
 
   const applyPeerSettings = () => {
+    const cleanPeerHost = peerHost.trim().replace(/^https?:\/\//i, '');
     localStorage.setItem('aether_peer_ui_mode', peerUiMode);
     localStorage.setItem('aether_peer_mode', peerMode);
-    localStorage.setItem('aether_peer_host', peerHost.trim());
+    localStorage.setItem('aether_peer_host', cleanPeerHost);
     localStorage.setItem('aether_peer_port', String(Number(peerPort) || 9000));
     localStorage.setItem('aether_peer_path', peerPath.trim() || '/peerjs');
     localStorage.setItem('aether_peer_secure', peerSecure ? 'true' : 'false');
@@ -1320,17 +1853,17 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const getRelayWsUrl = () => {
     const wsUrlRaw = (import.meta.env.VITE_SIGNAL_URL as string) || (import.meta.env.VITE_RELAY_WS_URL as string);
     const wsUrlLocal = import.meta.env.VITE_SIGNAL_URL_LOCAL as string;
+    const protocol = window.location.protocol;
     const currentHost = window.location.hostname;
     const isLocalHost = currentHost === "localhost" || currentHost === "127.0.0.1";
-    let wsUrl = (isLocalHost ? wsUrlLocal : wsUrlRaw) || wsUrlRaw;
+    const isDesktopFile = protocol === "file:";
+    let wsUrl = "";
+    if (isDesktopFile) {
+      wsUrl = wsUrlLocal || "ws://127.0.0.1:8080";
+    } else {
+      wsUrl = (isLocalHost ? wsUrlLocal : wsUrlRaw) || wsUrlRaw || "";
+    }
     if (!wsUrl) return "";
-    try {
-      const u = new URL(wsUrl);
-      if (!isLocalHost && (u.hostname === "localhost" || u.hostname === "127.0.0.1")) {
-        u.hostname = currentHost;
-        wsUrl = u.toString();
-      }
-    } catch {}
     return wsUrl.replace(/\/+$/, "");
   };
 
@@ -1446,22 +1979,52 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   }, [peerUiMode]);
 
   const createPhoneSource = () => {
+    const currentPhoneCount = cameraSourcesRef.current.filter((s) => s.kind === 'phone').length;
+    if (currentPhoneCount >= MAX_PHONE_CAMS) {
+      setStatusMsg({ type: 'warn', text: `Phone camera limit reached (${MAX_PHONE_CAMS}). Remove one slot before adding another.` });
+      return;
+    }
     const id = generateId();
-    const label = `Phone Cam ${cameraSources.filter(s => s.kind === 'phone').length + 1}`;
+    const label = `Phone Cam ${currentPhoneCount + 1}`;
     const src: CameraSource = { id, kind: 'phone', label, status: 'pending' };
-    setCameraSources(prev => [...prev, src]);
+    setCameraSources(prev => {
+      const next = [...prev, src];
+      cameraSourcesRef.current = next;
+      return next;
+    });
     setActivePhoneSourceId(id);
     setShowQRModal(true);
 
     const timer = window.setTimeout(() => {
-      setCameraSources(prev => prev.map(s => s.id === id && s.status === 'pending' ? { ...s, status: 'failed' } : s));
+      setCameraSources(prev => {
+        const next = prev.map(s => s.id === id && s.status === 'pending' ? { ...s, status: 'failed' } : s);
+        cameraSourcesRef.current = next;
+        return next;
+      });
     }, 30000);
     phonePendingTimersRef.current.set(id, timer);
   };
 
   const openPhoneQr = (sourceId: string) => {
+    const pendingTimer = phonePendingTimersRef.current.get(sourceId);
+    if (pendingTimer) {
+      window.clearTimeout(pendingTimer);
+      phonePendingTimersRef.current.delete(sourceId);
+    }
     setActivePhoneSourceId(sourceId);
-    setCameraSources(prev => prev.map(s => s.id === sourceId && s.status === 'failed' ? { ...s, status: 'pending' } : s));
+    setCameraSources(prev => {
+      const next = prev.map(s => s.id === sourceId && s.status !== 'live' ? { ...s, status: 'pending' } : s);
+      cameraSourcesRef.current = next;
+      return next;
+    });
+    const timer = window.setTimeout(() => {
+      setCameraSources(prev => {
+        const next = prev.map(s => s.id === sourceId && s.status === 'pending' ? { ...s, status: 'failed' } : s);
+        cameraSourcesRef.current = next;
+        return next;
+      });
+    }, 30000);
+    phonePendingTimersRef.current.set(sourceId, timer);
     setShowQRModal(true);
   };
 
@@ -1470,7 +2033,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   };
 
   const removeSource = (id: string) => {
-    const src = cameraSources.find(s => s.id === id);
+    const src = cameraSourcesRef.current.find(s => s.id === id);
     if (src?.stream) {
       try { src.stream.getTracks().forEach(t => t.stop()); } catch {}
     }
@@ -1492,7 +2055,21 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       window.clearTimeout(timer);
       phonePendingTimersRef.current.delete(id);
     }
-    setCameraSources(prev => prev.filter(s => s.id !== id));
+    const activeCall = phoneCallsRef.current.get(id);
+    if (activeCall) {
+      try { activeCall.close(); } catch {}
+      phoneCallsRef.current.delete(id);
+    }
+    mobileMetaRef.current.forEach((meta, peer) => {
+      if (meta.sourceId === id) {
+        mobileMetaRef.current.delete(peer);
+      }
+    });
+    setCameraSources(prev => {
+      const next = prev.filter(s => s.id !== id);
+      cameraSourcesRef.current = next;
+      return next;
+    });
   };
 
   const makeMain = (layerId?: string) => {
@@ -1913,10 +2490,17 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
       
       {statusMsg && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 px-6 py-3 rounded-xl text-sm font-bold flex flex-col items-center gap-1 shadow-lg bg-aether-800 border border-aether-700 z-50">
-          <div className="flex items-center gap-3">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 px-6 py-3 rounded-xl text-sm font-bold flex flex-col items-center gap-1 shadow-lg bg-aether-800 border border-aether-700 z-50 min-w-[320px]">
+          <div className="w-full flex items-center gap-3">
             <AlertCircle size={20} className={statusMsg.type === 'error' ? 'text-red-400' : 'text-blue-400'} />
-            <span>{statusMsg.text}</span>
+            <span className="flex-1">{statusMsg.text}</span>
+            <button
+              onClick={() => setStatusMsg(null)}
+              className="text-gray-400 hover:text-white"
+              aria-label="Dismiss status message"
+            >
+              <X size={16} />
+            </button>
           </div>
           {incomingRes && (
             <div className="text-[11px] font-mono opacity-80">
@@ -2042,7 +2626,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:flex-row">
         <aside className="w-16 hidden md:flex flex-col items-center py-6 gap-6 border-r border-aether-700 bg-aether-800/50">
            <SourceButton icon={<Camera size={24} />} label="Camera" onClick={() => setShowDeviceSelector(true)} />
-           <SourceButton icon={<Smartphone size={24} />} label="Mobile" onClick={createPhoneSource} />
+           <SourceButton icon={<Smartphone size={24} />} label={phoneSlotsFull ? `Mobile (${MAX_PHONE_CAMS} max)` : "Mobile"} onClick={createPhoneSource} disabled={phoneSlotsFull} />
            <SourceButton icon={<Monitor size={24} />} label="Screen" onClick={addScreenSource} />
            <SourceButton icon={<ImageIcon size={24} />} label="Image" onClick={() => fileInputRef.current?.click()} />
            <SourceButton icon={<Type size={24} />} label="Text" onClick={addTextLayer} />
@@ -2286,10 +2870,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                     ))}
 
                     <div className="pt-2">
-                      <h4 className="text-xs font-bold text-gray-300 mb-2">Phone Slots</h4>
-                      {cameraSources.filter(s => s.kind === 'phone').length === 0 && (
+                      <h4 className="text-xs font-bold text-gray-300 mb-2">Phone Slots ({phoneSourceCount}/{MAX_PHONE_CAMS})</h4>
+                      {phoneSourceCount === 0 && (
                         <div className="text-[10px] text-gray-500 border border-aether-700 rounded p-2 bg-aether-800/30">
                           No phone slots created yet.
+                        </div>
+                      )}
+                      {phoneSlotsFull && (
+                        <div className="text-[10px] text-amber-300 border border-amber-500/40 rounded p-2 bg-amber-500/10 mb-2">
+                          Phone slot limit reached. Remove one slot to add another.
                         </div>
                       )}
                       {cameraSources.filter(s => s.kind === 'phone').map(src => (
@@ -2372,6 +2961,14 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                     <span>Queue: <span className="text-gray-400">{streamHealth.queueKb} KB</span></span>
                     <span>Drops: <span className="text-gray-400">{streamHealth.drops}</span></span>
                     <span>RTT: <span className="text-gray-400">{streamHealth.rttMs !== null ? `${streamHealth.rttMs} ms` : "--"}</span></span>
+                  </div>
+                  <div className="mt-2 font-semibold text-white">Encoder Bootstrap</div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    <span>Recorder: <span className="text-gray-400">{encoderBootstrap.recorderState}</span></span>
+                    <span>First chunk: <span className="text-gray-400">{encoderBootstrap.firstChunkReceived ? "yes" : "no"}</span></span>
+                    <span>Chunks sent: <span className="text-gray-400">{encoderBootstrap.chunksSent}</span></span>
+                    <span>Zero chunks: <span className="text-gray-400">{encoderBootstrap.zeroSizeChunks}</span></span>
+                    <span>First chunk delay: <span className="text-gray-400">{encoderBootstrap.firstChunkDelayMs !== null ? `${encoderBootstrap.firstChunkDelayMs} ms` : "--"}</span></span>
                   </div>
                   <div className="text-[9px] text-gray-500 mt-1">Updates while Live. Drops indicate network backpressure.</div>
                 </div>
@@ -2648,16 +3245,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   <select 
                     value={streamQuality}
                     onChange={(e) => {
-                      const val = e.target.value as any;
-                      setStreamQuality(val);
-                      localStorage.setItem('aether_stream_quality', val);
+                      const val = e.target.value as StreamQualityPreset;
+                      applyStreamQuality(val);
                     }}
                     disabled={wifiMode}
                     className={`w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none ${wifiMode ? 'opacity-60 cursor-not-allowed' : ''}`}
                   >
-                    <option value="high">High (6 Mbps - 1080p60)</option>
-                    <option value="medium">Medium (3 Mbps - 1080p30)</option>
-                    <option value="low">Low (1.5 Mbps - 720p30)</option>
+                    <option value="high">High (3.0 Mbps - 720p30)</option>
+                    <option value="medium">Medium (2.2 Mbps - 720p30)</option>
+                    <option value="low">Low (1.2 Mbps - 720p30)</option>
                   </select>
                   <div className="mt-2 flex items-center justify-between text-[10px] text-gray-400">
                     <span>Lower this if YouTube complains about "Low Signal" or buffering.</span>
