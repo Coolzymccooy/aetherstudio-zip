@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: aether-relay
+    env: node
+    rootDir: aether-relay
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: RELAY_TOKEN
+        sync: false
+      - key: RTMP_URL_PRIMARY
+        value: rtmps://a.rtmp.youtube.com/live2
+      - key: RTMP_URL_FALLBACK
+        value: rtmp://a.rtmp.youtube.com/live2
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: LICENSE_SECRET
+        sync: false
+      - key: LICENSE_ADMIN_TOKEN
+        sync: false

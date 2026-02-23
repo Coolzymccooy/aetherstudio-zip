@@ -41,6 +41,6 @@ Landing page reads:
 - `VITE_DESKTOP_DOWNLOAD_URL`
 
 Set this to your release URL (for example GitHub Releases latest):
-- `https://github.com/Coolzymccoy/aetherstudio-zip/releases/latest`
+- `https://github.com/Coolzymccooy/aetherstudio-zip/releases/latest`
 
 When set, the landing page shows **Download Desktop App**.

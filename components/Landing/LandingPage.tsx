@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Zap, Circle, ArrowRight, Smartphone, Monitor, Mic, Shield, Play, Menu, X, CheckCircle, Lock, Layers, Radio, ChevronLeft, Loader2, AlertCircle, Terminal, Cpu, PlayCircle, Camera } from 'lucide-react';
+import { Zap, Circle, ArrowRight, Smartphone, Monitor, Mic, Shield, Play, Menu, X, CheckCircle, Lock, Layers, Radio, ChevronLeft, Loader2, AlertCircle, Terminal, Cpu, PlayCircle, Camera, Download } from 'lucide-react';
 import { auth } from '../../services/firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, User, signInAnonymously } from 'firebase/auth';
 
@@ -10,6 +10,14 @@ interface LandingPageProps {
   // Function to allow dev bypass in parent
   onDevBypass?: () => void;
 }
+
+const DEFAULT_DESKTOP_DOWNLOAD_URL = 'https://github.com/Coolzymccooy/aetherstudio-zip/releases/latest';
+
+const normalizeDesktopDownloadUrl = (value: string) =>
+  value.replace(
+    'github.com/Coolzymccoy/aetherstudio-zip',
+    'github.com/Coolzymccooy/aetherstudio-zip'
+  );
 
 export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, onOpenMobileMode, onDevBypass }) => {
   const [authMode, setAuthMode] = useState<'signin' | 'signup' | 'waitlist' | 'forgot' | null>(null);
@@ -22,7 +30,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ user, onEnterStudio, o
   
   // FIX: Track if we just performed a login action to auto-redirect once user state propagates
   const [justLoggedIn, setJustLoggedIn] = useState(false);
-  const desktopDownloadUrl = ((import.meta.env.VITE_DESKTOP_DOWNLOAD_URL as string | undefined) || '').trim();
+  const rawDesktopDownloadUrl = ((import.meta.env.VITE_DESKTOP_DOWNLOAD_URL as string | undefined) || '').trim();
+  const desktopDownloadUrl = normalizeDesktopDownloadUrl(rawDesktopDownloadUrl || DEFAULT_DESKTOP_DOWNLOAD_URL);
 
   useEffect(() => {
     // Only enter studio if we have a user AND we just finished the login flow
