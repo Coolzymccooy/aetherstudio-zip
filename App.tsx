@@ -7,7 +7,8 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { Loader2 } from 'lucide-react';
 
 export default function App() {
-  const [view, setView] = useState<'landing' | 'studio' | 'mobile'>('landing');
+  const isDesktopRuntime = typeof window !== 'undefined' && !!(window as any).aetherDesktop;
+  const [view, setView] = useState<'landing' | 'studio' | 'mobile'>(() => (isDesktopRuntime ? 'studio' : 'landing'));
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [rehydrated, setRehydrated] = useState(false);
@@ -84,14 +85,16 @@ export default function App() {
       } else {
         const last = localStorage.getItem('aether_last_view');
         const devBypass = localStorage.getItem('aether_dev_bypass') === 'true';
-        if (rehydrated && last === 'studio' && devBypass) {
+        if (isDesktopRuntime && rehydrated) {
+          handleDevBypass();
+        } else if (rehydrated && last === 'studio' && devBypass) {
           handleDevBypass();
         }
       }
     });
 
     return () => unsubscribe();
-  }, [rehydrated, view]);
+  }, [isDesktopRuntime, rehydrated, view]);
 
   // Dev Bypass Handler
   const handleDevBypass = () => {
@@ -172,11 +175,25 @@ export default function App() {
   if (view === 'studio') {
     // Enforce Auth for Studio (optional, but good for analytics)
     if (!user) {
+       if (isDesktopRuntime) {
+         handleDevBypass();
+         return null;
+       }
        // If somehow here without user, fallback to landing to sign in
        setView('landing');
        return null;
     }
-    return <StudioCore user={user} onBack={() => { setUser(null); setView('landing'); localStorage.removeItem('aether_last_view'); }} />;
+    return (
+      <StudioCore
+        user={user}
+        onBack={() => {
+          if (isDesktopRuntime) return;
+          setUser(null);
+          setView('landing');
+          localStorage.removeItem('aether_last_view');
+        }}
+      />
+    );
   }
 
   return (
