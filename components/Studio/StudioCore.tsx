@@ -271,7 +271,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [layoutTemplate, setLayoutTemplate] = useState<'freeform' | 'main_thumbs' | 'grid_2x2' | 'side_by_side' | 'pip_corner'>('main_thumbs');
 
   const [transitionMode, setTransitionMode] = useState<'cut' | 'fade' | 'dip_white'>(() => {
-    return (localStorage.getItem('aether_transition_mode') as any) || 'fade';
+    return (localStorage.getItem('aether_transition_mode') as any) || 'cut';
   });
   const [transitionMs, setTransitionMs] = useState(() => Number(localStorage.getItem('aether_transition_ms') || 300));
   const [transitionAlpha, setTransitionAlpha] = useState(0);
@@ -496,9 +496,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     localStorage.setItem('aether_transition_ms', String(transitionMs || 300));
   }, [transitionMode, transitionMs]);
 
-  // UI Tab Switching
+  // UI Tab Switching — only auto-switch to Properties when user clicks the canvas,
+  // NOT when makeMain or other code updates the selectedLayerId while on Inputs.
   useEffect(() => {
-    if (selectedLayerId) setRightPanelTab('properties');
+    if (selectedLayerId && rightPanelTab !== 'inputs') setRightPanelTab('properties');
   }, [selectedLayerId]);
 
   // Status Message Auto-Dismiss
@@ -2197,20 +2198,18 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
   const makeMain = (layerId?: string) => {
     if (!layerId) return;
-    const action = () => {
-      setLayers(prev => {
-        const maxZ = prev.reduce((m, l) => Math.max(m, l.zIndex), 0) + 1;
-        return prev.map(l => l.id === layerId
-          ? { ...l, x: 0, y: 0, width: 1920, height: 1080, zIndex: maxZ, visible: true }
-          : { ...l, visible: l.visible ?? true }
-        );
-      });
-      setSelectedLayerId(layerId);
-      if (composerMode) {
-        setTimeout(() => applyComposerLayout(layerId), 0);
-      }
-    };
-    runTransition(action);
+    // Direct camera switch — no transition overlay. Transitions are for scene cuts.
+    setLayers(prev => {
+      const maxZ = prev.reduce((m, l) => Math.max(m, l.zIndex), 0) + 1;
+      return prev.map(l => l.id === layerId
+        ? { ...l, x: 0, y: 0, width: 1920, height: 1080, zIndex: maxZ, visible: true }
+        : { ...l, visible: l.visible ?? true }
+      );
+    });
+    setSelectedLayerId(layerId);
+    if (composerMode) {
+      setTimeout(() => applyComposerLayout(layerId), 0);
+    }
   };
 
   const ensureLowerThirdLayers = () => {
@@ -2894,23 +2893,23 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                 {/* ── Toggle Switch Helper ── */}
                 {/* Inline CSS for custom toggle switches */}
                 <style>{`
-                  .aether-toggle { position: relative; display: inline-flex; width: 36px; height: 20px; cursor: pointer; }
+                  .aether-toggle { position: relative; display: inline-flex; width: 40px; height: 22px; cursor: pointer; }
                   .aether-toggle input { opacity: 0; width: 0; height: 0; }
                   .aether-toggle .slider { position: absolute; inset: 0; background: #1e1b2e; border: 1px solid #3b3660; border-radius: 999px; transition: all .25s ease; }
-                  .aether-toggle .slider::before { content: ''; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: #6b7280; transition: all .25s ease; }
+                  .aether-toggle .slider::before { content: ''; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #6b7280; transition: all .25s ease; }
                   .aether-toggle input:checked + .slider { background: #7c3aed; border-color: #8b5cf6; }
-                  .aether-toggle input:checked + .slider::before { transform: translateX(16px); background: #ffffff; }
-                  .section-btn { padding: 4px 10px; font-size: 10px; border-radius: 6px; font-weight: 500; transition: all .15s ease; }
+                  .aether-toggle input:checked + .slider::before { transform: translateX(18px); background: #ffffff; }
+                  .section-btn { padding: 5px 12px; font-size: 11px; border-radius: 6px; font-weight: 600; transition: all .15s ease; }
                   .section-btn:active { transform: scale(0.95); }
                   .section-btn-primary { background: linear-gradient(135deg, #7c3aed, #6d28d9); color: white; }
                   .section-btn-primary:hover { background: linear-gradient(135deg, #8b5cf6, #7c3aed); }
                   .section-btn-danger { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid rgba(239,68,68,0.25); }
                   .section-btn-danger:hover { background: rgba(239,68,68,0.25); }
-                  .section-btn-ghost { background: rgba(139,92,246,0.08); color: #a5b4fc; border: 1px solid rgba(139,92,246,0.2); }
-                  .section-btn-ghost:hover { background: rgba(139,92,246,0.15); }
-                  .section-input { width: 100%; background: #110b20; border: 1px solid #2e2650; border-radius: 6px; padding: 6px 10px; font-size: 11px; color: #e2e8f0; outline: none; transition: border .15s; }
+                  .section-btn-ghost { background: rgba(139,92,246,0.1); color: #c4b5fd; border: 1px solid rgba(139,92,246,0.25); }
+                  .section-btn-ghost:hover { background: rgba(139,92,246,0.2); }
+                  .section-input { width: 100%; background: #110b20; border: 1px solid #2e2650; border-radius: 6px; padding: 7px 12px; font-size: 12px; color: #e2e8f0; outline: none; transition: border .15s; }
                   .section-input:focus { border-color: #7c3aed; }
-                  .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+                  .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
                   .status-live { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); }
                   .status-pending { background: rgba(234,179,8,0.12); color: #fbbf24; border: 1px solid rgba(234,179,8,0.25); }
                   .status-error { background: rgba(239,68,68,0.12); color: #f87171; border: 1px solid rgba(239,68,68,0.25); }
