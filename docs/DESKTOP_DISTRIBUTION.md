@@ -28,6 +28,27 @@ npm run desktop:dist:installer
 
 Note: installer build may require Windows Developer Mode/admin symlink privileges on some machines.
 
+## Automatic updates (electron-updater)
+
+Auto-update is enabled for packaged builds and checks on startup, then every 4 hours.
+
+Release requirements:
+- Build and publish installer artifacts with `electron-builder` (NSIS target).
+- Publish releases to GitHub repo `Coolzymccooy/aetherstudio-zip`.
+- Set `GH_TOKEN` in the release environment so `electron-builder` can upload artifacts and update metadata.
+
+Windows PowerShell (current shell session):
+```powershell
+$env:GH_TOKEN="YOUR_GITHUB_TOKEN"
+npm run desktop:publish
+```
+
+`desktop:publish` uploads NSIS installer assets and `latest.yml` for auto-update.
+
+Optional runtime env controls:
+- `AETHER_AUTO_UPDATE=0` to disable updater.
+- `AETHER_AUTO_UPDATE_INTERVAL_MS=<ms>` to change polling interval (minimum 60000 ms).
+
 ## Runtime behavior of packaged app
 
 - App UI is served locally from bundled `dist/`.

@@ -1,5 +1,6 @@
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog, shell, ipcMain } = require("electron");
 const { spawn } = require("child_process");
+const { autoUpdater } = require("electron-updater");
 const fs = require("fs");
 const http = require("http");
 const https = require("https");
@@ -13,6 +14,12 @@ const UI_PORT = Number(process.env.AETHER_DESKTOP_UI_PORT || 5174);
 const APP_URL_OVERRIDE = process.env.AETHER_DESKTOP_URL || "";
 const START_LOCAL_SERVICES = (process.env.AETHER_DESKTOP_SKIP_SERVICES || "0") !== "1";
 const START_UI_SERVER = (process.env.AETHER_DESKTOP_SKIP_UI_SERVER || "0") !== "1";
+const AUTO_UPDATE_ENABLED = (process.env.AETHER_AUTO_UPDATE || "1") !== "0";
+const IS_PORTABLE_BUILD = Boolean(process.env.PORTABLE_EXECUTABLE_FILE);
+const AUTO_UPDATE_INTERVAL_MS = Math.max(
+  60_000,
+  Number(process.env.AETHER_AUTO_UPDATE_INTERVAL_MS || 4 * 60 * 60 * 1000)
+);
 const FFMPEG_REL_PATH = path.join(
   "tools",
   "ffmpeg",
@@ -23,6 +30,7 @@ const FFMPEG_REL_PATH = path.join(
 
 const childProcesses = [];
 let localUiServer = null;
+let updatePollTimer = null;
 
 const SINGLE_INSTANCE_LOCK = app.requestSingleInstanceLock();
 if (!SINGLE_INSTANCE_LOCK) {
@@ -143,6 +151,20 @@ function stopLocalUiServer() {
     localUiServer.close();
   } catch {}
   localUiServer = null;
+}
+
+function stopUpdatePolling() {
+  if (!updatePollTimer) return;
+  clearInterval(updatePollTimer);
+  updatePollTimer = null;
+}
+
+function broadcastUpdaterStatus(payload) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.webContents.send("aether-updater:status", payload);
+    } catch {}
+  }
 }
 
 function isPortListening(port, host = "127.0.0.1", timeoutMs = 800) {
@@ -285,10 +307,109 @@ function createWindow(appUrl) {
   });
 
   win.loadURL(appUrl);
+  return win;
+}
+
+function setupAutoUpdates(win) {
+  if (!AUTO_UPDATE_ENABLED || !app.isPackaged || IS_PORTABLE_BUILD) return;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on("checking-for-update", () => {
+    console.log("[updater] checking for updates");
+    broadcastUpdaterStatus({ type: "checking" });
+  });
+
+  autoUpdater.on("update-available", (info) => {
+    console.log("[updater] update available", info?.version || "unknown");
+    broadcastUpdaterStatus({ type: "available", version: info?.version || null });
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    console.log("[updater] no updates");
+    broadcastUpdaterStatus({ type: "not-available" });
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    const pct = Number(progress?.percent || 0).toFixed(1);
+    console.log(`[updater] download ${pct}%`);
+    broadcastUpdaterStatus({ type: "downloading", percent: Number(progress?.percent || 0) });
+  });
+
+  autoUpdater.on("error", (err) => {
+    console.warn("[updater] error", String(err?.message || err));
+    broadcastUpdaterStatus({ type: "error", message: String(err?.message || err) });
+  });
+
+  autoUpdater.on("update-downloaded", async (info) => {
+    broadcastUpdaterStatus({ type: "downloaded", version: info?.version || null });
+    try {
+      const focused = BrowserWindow.getFocusedWindow() || win;
+      const result = await dialog.showMessageBox(focused, {
+        type: "info",
+        buttons: ["Restart Now", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+        title: "Update Ready",
+        message: `Aether Studio ${info?.version || ""} is ready to install.`,
+        detail: "Restart now to apply the update.",
+      });
+      if (result.response === 0) {
+        setImmediate(() => autoUpdater.quitAndInstall(false, true));
+      }
+    } catch (err) {
+      console.warn("[updater] restart prompt failed", String(err?.message || err));
+    }
+  });
+
+  const checkNow = async () => {
+    try {
+      await autoUpdater.checkForUpdates();
+    } catch (err) {
+      console.warn("[updater] check failed", String(err?.message || err));
+    }
+  };
+
+  void checkNow();
+  stopUpdatePolling();
+  updatePollTimer = setInterval(() => {
+    void checkNow();
+  }, AUTO_UPDATE_INTERVAL_MS);
+}
+
+function setupUpdaterIpc() {
+  ipcMain.handle("aether-updater:check", async () => {
+    if (!AUTO_UPDATE_ENABLED) {
+      return { ok: false, reason: "disabled" };
+    }
+    if (!app.isPackaged) {
+      return { ok: false, reason: "not_packaged" };
+    }
+    if (IS_PORTABLE_BUILD) {
+      return { ok: false, reason: "portable_build" };
+    }
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      const version = result?.updateInfo?.version || null;
+      return { ok: true, version };
+    } catch (err) {
+      return { ok: false, reason: "check_failed", message: String(err?.message || err) };
+    }
+  });
+
+  ipcMain.handle("aether-updater:install", async () => {
+    if (!AUTO_UPDATE_ENABLED || !app.isPackaged || IS_PORTABLE_BUILD) {
+      return { ok: false, reason: "not_supported" };
+    }
+    setImmediate(() => autoUpdater.quitAndInstall(false, true));
+    return { ok: true };
+  });
 }
 
 app.whenReady().then(async () => {
   try {
+    setupUpdaterIpc();
     const appUrl = await ensureAppUiUrl();
     const lanAddress = resolveLanAddress();
     if (!process.env.AETHER_DESKTOP_MOBILE_BASE_URL) {
@@ -310,7 +431,8 @@ app.whenReady().then(async () => {
     }
 
     await waitForHttpReady(appUrl, 45000);
-    createWindow(appUrl);
+    const mainWindow = createWindow(appUrl);
+    setupAutoUpdates(mainWindow);
   } catch (err) {
     dialog.showErrorBox(
       "AetherStudio Desktop Startup Failed",
@@ -321,6 +443,7 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  stopUpdatePolling();
   stopLocalUiServer();
   stopChildProcesses();
   app.quit();
@@ -334,6 +457,7 @@ app.on("second-instance", () => {
 });
 
 app.on("before-quit", () => {
+  stopUpdatePolling();
   stopLocalUiServer();
   stopChildProcesses();
 });

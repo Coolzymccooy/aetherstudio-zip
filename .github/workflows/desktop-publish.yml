@@ -1,0 +1,39 @@
+name: Desktop Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Ensure GH token exists
+        shell: pwsh
+        run: |
+          if (-not "${{ secrets.GH_TOKEN }}") {
+            Write-Error "Missing GH_TOKEN secret. Add GH_TOKEN in repo Actions secrets."
+            exit 1
+          }
+
+      - name: Publish desktop artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: npm run desktop:publish

@@ -40,6 +40,12 @@ type EncoderBootstrapStats = {
   zeroSizeChunks: number;
   firstChunkDelayMs: number | null;
 };
+type DesktopUpdaterStatus = {
+  type: 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
+  version?: string | null;
+  percent?: number;
+  message?: string;
+};
 
 const SourceButton: React.FC<{ icon: React.ReactNode; label: string; onClick: () => void; disabled?: boolean }> = ({ icon, label, onClick, disabled }) => (
   <button
@@ -122,6 +128,11 @@ const SettingsSection: React.FC<{
 );
 
 export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
+  const desktopUpdater = (window as any).aetherDesktop as undefined | {
+    checkForUpdates?: () => Promise<{ ok: boolean; reason?: string; message?: string; version?: string | null }>;
+    installDownloadedUpdate?: () => Promise<{ ok: boolean; reason?: string }>;
+    onUpdateStatus?: (handler: (status: DesktopUpdaterStatus) => void) => () => void;
+  };
   // --- STATE DECLARATIONS ---
   const [cloudConnected, setCloudConnected] = useState(false);
   const [layers, setLayers] = useState<Layer[]>([]);
@@ -157,6 +168,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [peerId, setPeerId] = useState<string>('');
   const [isRecording, setIsRecording] = useState(false);
   const [statusMsg, setStatusMsg] = useState<StudioStatusMsg | null>(null);
+  const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [streamHealth, setStreamHealth] = useState<{ kbps: number; drops: number; rttMs: number | null; queueKb: number }>({
     kbps: 0,
     drops: 0,
@@ -460,6 +472,42 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       return () => clearTimeout(timer);
     }
   }, [statusMsg]);
+
+  useEffect(() => {
+    if (!desktopUpdater?.onUpdateStatus) return;
+    const off = desktopUpdater.onUpdateStatus((status) => {
+      if (!status?.type) return;
+      if (status.type === 'checking') {
+        setStatusMsg({ type: 'info', text: 'Checking for updates...' });
+        return;
+      }
+      if (status.type === 'available') {
+        const v = status.version ? ` ${status.version}` : '';
+        setStatusMsg({ type: 'info', text: `Update available${v}. Downloading...` });
+        return;
+      }
+      if (status.type === 'downloading') {
+        const pct = Number(status.percent || 0);
+        setStatusMsg({ type: 'info', text: `Downloading update... ${pct.toFixed(1)}%` });
+        return;
+      }
+      if (status.type === 'downloaded') {
+        const v = status.version ? ` ${status.version}` : '';
+        setStatusMsg({ type: 'info', text: `Update${v} downloaded. Restart to install.` });
+        return;
+      }
+      if (status.type === 'not-available') {
+        setStatusMsg({ type: 'info', text: 'You are on the latest version.' });
+        return;
+      }
+      if (status.type === 'error') {
+        setStatusMsg({ type: 'error', text: status.message || 'Update check failed.' });
+      }
+    });
+    return () => {
+      try { off?.(); } catch {}
+    };
+  }, [desktopUpdater]);
 
   useEffect(() => {
     if (!normalizedLicenseKey) {
@@ -1824,6 +1872,37 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
      onBack();
   };
 
+  const checkForDesktopUpdates = async () => {
+    if (!desktopUpdater?.checkForUpdates) {
+      setStatusMsg({ type: 'warn', text: 'Auto-update is available in the installed desktop app only.' });
+      return;
+    }
+    if (isCheckingUpdates) return;
+    setIsCheckingUpdates(true);
+    setStatusMsg({ type: 'info', text: 'Checking for updates...' });
+    try {
+      const res = await desktopUpdater.checkForUpdates();
+      if (!res?.ok) {
+        if (res?.reason === 'not_packaged') {
+          setStatusMsg({ type: 'warn', text: 'Update checks are disabled in dev mode.' });
+        } else if (res?.reason === 'portable_build') {
+          setStatusMsg({ type: 'warn', text: 'Auto-update is disabled for portable builds.' });
+        } else if (res?.reason === 'disabled') {
+          setStatusMsg({ type: 'warn', text: 'Auto-update is disabled by environment config.' });
+        } else {
+          setStatusMsg({ type: 'error', text: res?.message || 'Unable to check for updates.' });
+        }
+        return;
+      }
+      // Final status comes from updater events; this line confirms request accepted.
+      setStatusMsg({ type: 'info', text: 'Update check started.' });
+    } catch {
+      setStatusMsg({ type: 'error', text: 'Update check failed.' });
+    } finally {
+      setIsCheckingUpdates(false);
+    }
+  };
+
   const canStartLive = (relayConnected === true) && streamKey.trim().length > 0;
   const canToggleLive = streamStatus === StreamStatus.LIVE || canStartLive;
   const phoneSourceCount = cameraSources.filter((s) => s.kind === 'phone').length;
@@ -2595,6 +2674,18 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
           </button>
 
           <button onClick={() => setShowHelpModal(true)} className="p-2 text-gray-400 hover:text-white hover:bg-aether-800 rounded-lg"><HelpCircle size={20} /></button>
+          <button
+            onClick={checkForDesktopUpdates}
+            disabled={isCheckingUpdates}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+              isCheckingUpdates
+                ? 'bg-aether-900 border-aether-800 text-gray-500 cursor-not-allowed'
+                : 'bg-aether-800 border-aether-700 text-gray-200 hover:bg-aether-700 hover:text-white'
+            }`}
+            title="Check for app updates"
+          >
+            <Download size={16} /> {isCheckingUpdates ? 'Checking...' : 'Check Updates'}
+          </button>
           
           <button 
             onClick={toggleRecording} 
