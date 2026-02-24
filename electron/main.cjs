@@ -14,6 +14,12 @@ const UI_PORT = Number(process.env.AETHER_DESKTOP_UI_PORT || 5174);
 const APP_URL_OVERRIDE = process.env.AETHER_DESKTOP_URL || "";
 const START_LOCAL_SERVICES = (process.env.AETHER_DESKTOP_SKIP_SERVICES || "0") !== "1";
 const START_UI_SERVER = (process.env.AETHER_DESKTOP_SKIP_UI_SERVER || "0") !== "1";
+
+// Cloud-first: in packaged builds, skip local relay/peer autostart unless
+// explicitly opted-in via env var. Dev mode always starts local services.
+const CLOUD_FIRST = app.isPackaged
+  ? (process.env.AETHER_DESKTOP_LOCAL_SERVICES || "0") !== "1"
+  : false;
 const AUTO_UPDATE_ENABLED = (process.env.AETHER_AUTO_UPDATE || "1") !== "0";
 const IS_PORTABLE_BUILD = Boolean(process.env.PORTABLE_EXECUTABLE_FILE);
 const AUTO_UPDATE_INTERVAL_MS = Math.max(
@@ -125,14 +131,29 @@ function spawnNodeScript(name, scriptRelPath, envOverrides) {
     ...(envOverrides || {}),
   };
 
-  const child = spawn(command, [scriptPath], {
-    cwd: getAppRoot(),
-    env,
-    stdio: ["ignore", outFd, errFd],
-    windowsHide: true,
-  });
-  childProcesses.push(child);
-  return child;
+  // Use runDir as cwd in packaged builds – the app root may be inside an asar
+  // archive which causes ENOENT when used as cwd for child processes.
+  const safeCwd = app.isPackaged ? runDir : getAppRoot();
+
+  try {
+    const child = spawn(command, [scriptPath], {
+      cwd: safeCwd,
+      env,
+      stdio: ["ignore", outFd, errFd],
+      windowsHide: true,
+    });
+
+    // Prevent uncaught main-process crash if executable is missing (ENOENT)
+    child.on("error", (err) => {
+      console.error(`[aether-desktop] child "${name}" spawn error:`, err?.message || err);
+    });
+
+    childProcesses.push(child);
+    return child;
+  } catch (err) {
+    console.error(`[aether-desktop] failed to spawn "${name}":`, err?.message || err);
+    return null;
+  }
 }
 
 function stopChildProcesses() {
@@ -141,7 +162,7 @@ function stopChildProcesses() {
     if (!child || child.killed) continue;
     try {
       child.kill("SIGINT");
-    } catch {}
+    } catch { }
   }
 }
 
@@ -149,7 +170,7 @@ function stopLocalUiServer() {
   if (!localUiServer) return;
   try {
     localUiServer.close();
-  } catch {}
+  } catch { }
   localUiServer = null;
 }
 
@@ -163,7 +184,7 @@ function broadcastUpdaterStatus(payload) {
   for (const win of BrowserWindow.getAllWindows()) {
     try {
       win.webContents.send("aether-updater:status", payload);
-    } catch {}
+    } catch { }
   }
 }
 
@@ -176,7 +197,7 @@ function isPortListening(port, host = "127.0.0.1", timeoutMs = 800) {
       settled = true;
       try {
         socket.destroy();
-      } catch {}
+      } catch { }
       resolve(value);
     };
 
@@ -416,17 +437,21 @@ app.whenReady().then(async () => {
       process.env.AETHER_DESKTOP_MOBILE_BASE_URL = `http://${lanAddress}:${UI_PORT}`;
     }
 
-    if (START_LOCAL_SERVICES) {
-      const relayEnv = relayEnvFromLocal();
-      const relayPort = Number(relayEnv.RELAY_PORT || 8080);
-      const relayListening = await isPortListening(relayPort);
-      if (!relayListening) {
-        spawnNodeScript("relay", "aether-relay/server.js", relayEnv);
-      }
+    if (START_LOCAL_SERVICES && !CLOUD_FIRST) {
+      try {
+        const relayEnv = relayEnvFromLocal();
+        const relayPort = Number(relayEnv.RELAY_PORT || 8080);
+        const relayListening = await isPortListening(relayPort);
+        if (!relayListening) {
+          spawnNodeScript("relay", "aether-relay/server.js", relayEnv);
+        }
 
-      const peerListening = await isPortListening(9000);
-      if (!peerListening) {
-        spawnNodeScript("peer", "server/peer.cjs", process.env);
+        const peerListening = await isPortListening(9000);
+        if (!peerListening) {
+          spawnNodeScript("peer", "server/peer.cjs", process.env);
+        }
+      } catch (err) {
+        console.error("[aether-desktop] local service startup failed (non-fatal):", err?.message || err);
       }
     }
 

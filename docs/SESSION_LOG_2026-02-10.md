@@ -356,3 +356,53 @@ If you want me to continue with **Stripe integration** or **mobile layout upgrad
   - `Vercel Deploy`: passing on latest `master`.
   - `Render Health Check`: passing on latest `master`.
   - `Desktop Publish`: workflow reaches publish gate and fails at `Ensure GH token exists` because `GH_TOKEN` is not set in repository Actions secrets.
+
+---
+
+## Update (2026-02-24) - Desktop Stability + Streaming Reliability Fixes
+
+### Goals
+- Fix ENOENT crash in packaged builds by hardening child-process startup.
+- Make desktop cloud-first (no local relay/peer autostart in packaged builds).
+- Remove Firebase config blocker for desktop users.
+- Fix image-source render performance (per-frame `new Image()` replaced with cache).
+- Stabilize studio layout (overflow-hidden root, composition cap constant).
+- Improve relay fatal diagnostics and restart tolerance.
+
+### Changes implemented
+
+#### electron/main.cjs
+- Added `CLOUD_FIRST` flag: packaged builds skip local service spawn unless `AETHER_DESKTOP_LOCAL_SERVICES=1`.
+- Wrapped `spawn` in try/catch with `child.on("error")` handler.
+- Changed `cwd` to `getRunDir()` in packaged builds (avoids asar ENOENT).
+- Guarded local service startup with `!CLOUD_FIRST`.
+
+#### electron/preload.cjs
+- Changed `aether_peer_ui_mode` from `"local"` to `"auto"`.
+- Changed `aether_peer_mode` from `"custom"` to `"cloud"`.
+
+#### App.tsx
+- Firebase config guard now checks `!isDesktopRuntime`: desktop bypasses to Studio, web still shows blocker.
+
+#### components/Studio/CanvasStage.tsx
+- Added `imageElementsRef` (persistent image cache by layer ID).
+- Draw loop uses cached `HTMLImageElement` instead of creating `new Image()` per frame.
+- Added stale image cache cleanup in video lifecycle `useEffect`.
+
+#### components/Studio/StudioCore.tsx
+- Root container changed from `overflow-x-hidden overflow-y-auto` to `overflow-hidden`.
+- Added `MAX_COMPOSED_CAMERAS` constant (configurable via `VITE_MAX_COMPOSED_CAMERAS`, default 4).
+- Expanded `applyRelayFatalStatus` reason map with `max_restart_exceeded`, `relay_hard_congestion`, `all_destinations_failed`.
+- Added diagnostic metadata (attempts, lastError) to fatal toast messages.
+- Updated relay_fatal handler call to pass full message metadata.
+
+#### aether-relay/server.js
+- Increased `MAX_RESTART_ATTEMPTS` default from 6 to 10.
+- Increased `RELAY_SOAK_RESET_MS` default from 30000 to 45000.
+- Enriched `relay_fatal` payload for `max_restart_exceeded` with `lastError` and `lastCloseCode`.
+
+#### docs/RELEASE_CHECKLIST.md
+- Added smoke tests: cloud-first desktop, Firebase bypass, image stress, multi-camera stress, relay fatal recovery.
+
+#### docs/DESKTOP_DISTRIBUTION.md
+- Updated runtime behavior section to document cloud-first default and local-service opt-in override.

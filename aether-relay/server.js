@@ -74,9 +74,9 @@ const RESTART_MAX_DELAY_MS = Math.max(
 );
 const MAX_RESTART_ATTEMPTS = Math.max(
   1,
-  Number(process.env.RELAY_MAX_RESTART_ATTEMPTS || 6)
+  Number(process.env.RELAY_MAX_RESTART_ATTEMPTS || 10)
 );
-const RELAY_SOAK_RESET_MS = Math.max(5000, Number(process.env.RELAY_SOAK_RESET_MS || 30000));
+const RELAY_SOAK_RESET_MS = Math.max(5000, Number(process.env.RELAY_SOAK_RESET_MS || 45000));
 const INPUT_CHUNK_TIMEOUT_MS = Math.max(
   2000,
   Number(process.env.RELAY_INPUT_CHUNK_TIMEOUT_MS || 15000)
@@ -148,7 +148,7 @@ function logEvent(event, fields = {}) {
 function safeSendWs(ws, payload) {
   try {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
-  } catch {}
+  } catch { }
 }
 
 function runFfmpegCheck(cb) {
@@ -161,7 +161,7 @@ function runFfmpegCheck(cb) {
     done = true;
     try {
       proc.kill("SIGKILL");
-    } catch {}
+    } catch { }
     cb(new Error("ffmpeg_check_timeout"));
   }, 2500);
 
@@ -590,13 +590,13 @@ wss.on("connection", (ws, req) => {
     if (ffmpeg) {
       try {
         ffmpeg.stdin.removeAllListeners("drain");
-      } catch {}
+      } catch { }
       try {
         ffmpeg.stdin.end();
-      } catch {}
+      } catch { }
       try {
         ffmpeg.kill("SIGINT");
-      } catch {}
+      } catch { }
       ffmpeg = null;
     }
 
@@ -691,7 +691,13 @@ wss.on("connection", (ws, req) => {
       wantStreaming = false;
       const reason = "max_restart_exceeded";
       setLastError(reason);
-      safeSendWs(ws, { type: "relay_fatal", reason, attempts: restartAttempts });
+      safeSendWs(ws, {
+        type: "relay_fatal",
+        reason,
+        attempts: restartAttempts,
+        lastError: relayRuntime.lastError || null,
+        lastCloseCode: relayRuntime.lastCloseCode ?? null,
+      });
       logEvent("relay.fatal", { ip: clientIp, reason, attempts: restartAttempts });
       return;
     }

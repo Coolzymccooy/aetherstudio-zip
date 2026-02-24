@@ -77,6 +77,11 @@ git push origin v0.0.4
   - Relay shows online.
   - AI panel is available.
   - `Check Updates` button is visible.
+- **Cloud-first desktop**: confirm no local relay/peer child processes are spawned in packaged mode (check Task Manager / `relay.desktop.out.log`).
+- **Firebase bypass**: with missing Firebase env vars, desktop opens Studio directly; web still shows the "Missing Firebase Config" blocker.
+- **Image stress test**: add 5+ large image layers rapidly; verify UI remains responsive and no panel lock/stutter.
+- **Multi-camera stress test**: connect 4+ cameras; verify extra inputs beyond composition cap stay connected but UI remains stable.
+- **Relay fatal recovery test**: force relay disconnect; verify fatal toast shows clear reason, attempt count, and recovery guidance.
 
 ## 9) Security hygiene
 

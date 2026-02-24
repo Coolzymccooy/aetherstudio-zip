@@ -3,9 +3,12 @@ const { contextBridge, ipcRenderer } = require("electron");
 const mobileBase =
   (process.env.AETHER_DESKTOP_MOBILE_BASE_URL || "").trim() || "http://127.0.0.1:5174";
 
+// Default peer settings favour cloud-first operation. Desktop packaged builds
+// will connect to the cloud relay/peer service unless the user explicitly
+// overrides these values via the UI or env vars.
 const LOCAL_DEFAULTS = {
-  aether_peer_ui_mode: "local",
-  aether_peer_mode: "custom",
+  aether_peer_ui_mode: "auto",
+  aether_peer_mode: "cloud",
   aether_peer_host: "127.0.0.1",
   aether_peer_port: "9000",
   aether_peer_path: "/peerjs",
@@ -21,7 +24,7 @@ function applyLocalDefaults() {
         window.localStorage.setItem(key, value);
       }
     }
-  } catch {}
+  } catch { }
 }
 
 if (document.readyState === "loading") {
@@ -34,7 +37,7 @@ contextBridge.exposeInMainWorld("aetherDesktop", {
   checkForUpdates: () => ipcRenderer.invoke("aether-updater:check"),
   installDownloadedUpdate: () => ipcRenderer.invoke("aether-updater:install"),
   onUpdateStatus: (handler) => {
-    if (typeof handler !== "function") return () => {};
+    if (typeof handler !== "function") return () => { };
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on("aether-updater:status", listener);
     return () => ipcRenderer.removeListener("aether-updater:status", listener);

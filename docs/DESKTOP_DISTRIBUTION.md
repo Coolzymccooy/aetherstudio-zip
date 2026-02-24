@@ -54,9 +54,11 @@ Optional runtime env controls:
 ## Runtime behavior of packaged app
 
 - App UI is served locally from bundled `dist/`.
-- Relay (`aether-relay/server.js`) is launched locally.
-- PeerJS server (`server/peer.cjs`) is launched locally.
-- FFmpeg binary path is resolved from bundled `tools/`.
+- **Cloud-first mode (default)**: packaged builds connect to the configured cloud relay and peer service. Local relay and PeerJS server are **not** spawned automatically.
+- **Local service opt-in**: set `AETHER_DESKTOP_LOCAL_SERVICES=1` in the environment to re-enable local relay (`aether-relay/server.js`) and PeerJS server (`server/peer.cjs`) auto-start.
+- FFmpeg binary path is resolved from bundled `tools/` (used by cloud relay, not required locally in cloud-first mode).
+- Peer defaults are cloud-first (`aether_peer_mode=cloud`, `aether_peer_ui_mode=auto`). Users can override via the Settings UI.
+- If Firebase config is missing, desktop users bypass the blocker screen and go straight to Studio.
 
 ## Website download link
 

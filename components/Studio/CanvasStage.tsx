@@ -12,10 +12,10 @@ interface CanvasStageProps {
   transitionOverlay?: { alpha: number; color: string };
 }
 
-export const CanvasStage: React.FC<CanvasStageProps> = ({ 
-  layers, 
-  selectedLayerId, 
-  onSelectLayer, 
+export const CanvasStage: React.FC<CanvasStageProps> = ({
+  layers,
+  selectedLayerId,
+  onSelectLayer,
   onUpdateLayer,
   onCanvasReady,
   isPro,
@@ -25,10 +25,14 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number | null>(null);
   const hiddenContainerRef = useRef<HTMLDivElement>(null);
-  
+
   // Manual DOM Management for Video Elements
   const videoElementsRef = useRef<Map<string, HTMLVideoElement>>(new Map());
-  
+
+  // Persistent image element cache keyed by layerId. Avoids creating a new
+  // Image() on every animation frame which causes GC pressure and UI stutter.
+  const imageElementsRef = useRef<Map<string, HTMLImageElement>>(new Map());
+
   // State for animations (like text scrolling)
   const scrollOffsetsRef = useRef<Map<string, number>>(new Map());
 
@@ -50,19 +54,19 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
   // --- Initialize Segmentation ---
   useEffect(() => {
     const seg = new SelfieSegmentation({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
     });
     seg.setOptions({ modelSelection: 1 }); // 1 = Landscape (faster)
-    
+
     seg.onResults((results) => {
-        if (!results.segmentationMask || !processingRef.current) return;
-        // We need to capture this mask. Since we process serially, we check which layer is 'active' in the loop?
-        // Actually, we can't easily pass context. 
-        // Strategy: The loop sets a ref 'currentLayerId' before sending.
+      if (!results.segmentationMask || !processingRef.current) return;
+      // We need to capture this mask. Since we process serially, we check which layer is 'active' in the loop?
+      // Actually, we can't easily pass context. 
+      // Strategy: The loop sets a ref 'currentLayerId' before sending.
     });
-    
+
     segmenterRef.current = seg;
-    
+
     // Create offscreen buffer
     const osc = document.createElement('canvas');
     osc.width = 1280; osc.height = 720; // Match main canvas
@@ -75,83 +79,90 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     if (!container) return;
 
     // 1. Identify active video layers
-    const activeVideoLayers = safeLayers.filter(l => 
-        (l.type === SourceType.CAMERA || l.type === SourceType.SCREEN) && l.src instanceof MediaStream
+    const activeVideoLayers = safeLayers.filter(l =>
+      (l.type === SourceType.CAMERA || l.type === SourceType.SCREEN) && l.src instanceof MediaStream
     );
     const activeIds = new Set(activeVideoLayers.map(l => l.id));
 
     // 2. Cleanup Removed Sources
+    const allLayerIds = new Set(safeLayers.map(l => l.id));
     Array.from(videoElementsRef.current.keys()).forEach(id => {
-        if (!activeIds.has(id)) {
-            const video = videoElementsRef.current.get(id);
-            if (video) {
-                video.pause();
-                video.srcObject = null;
-                video.remove();
-            }
-            videoElementsRef.current.delete(id);
-            masksRef.current.delete(id);
+      if (!activeIds.has(id)) {
+        const video = videoElementsRef.current.get(id);
+        if (video) {
+          video.pause();
+          video.srcObject = null;
+          video.remove();
         }
+        videoElementsRef.current.delete(id);
+        masksRef.current.delete(id);
+      }
+    });
+    // Cleanup stale image cache entries for removed layers
+    Array.from(imageElementsRef.current.keys()).forEach(id => {
+      if (!allLayerIds.has(id)) {
+        imageElementsRef.current.delete(id);
+      }
     });
 
     // 3. Create/Update Active Sources
     activeVideoLayers.forEach(layer => {
-        let video = videoElementsRef.current.get(layer.id);
+      let video = videoElementsRef.current.get(layer.id);
 
-        if (!video) {
-            video = document.createElement('video');
-            video.muted = true;
-            video.autoplay = true;
-            video.playsInline = true;
-            video.setAttribute('playsinline', '');
-            video.setAttribute('webkit-playsinline', '');
-            
-            video.width = 1280; // Optimize for 720p analysis
-            video.height = 720;
-            
-            Object.assign(video.style, {
-                position: 'absolute',
-                top: '0',
-                left: '0',
-                width: '1px', height: '1px', opacity: '0.01', zIndex: '-10', pointerEvents: 'none',
-            });
+      if (!video) {
+        video = document.createElement('video');
+        video.muted = true;
+        video.autoplay = true;
+        video.playsInline = true;
+        video.setAttribute('playsinline', '');
+        video.setAttribute('webkit-playsinline', '');
 
-            const forcePlay = () => {
-                if (video && (video.paused || video.ended)) {
-                    video.play().catch(() => {});
-                }
-            };
-            video.addEventListener('loadedmetadata', forcePlay);
-            video.addEventListener('canplay', forcePlay);
-            video.addEventListener('pause', forcePlay);
+        video.width = 1280; // Optimize for 720p analysis
+        video.height = 720;
 
-            const reportSize = () => {
-              const w = video?.videoWidth;
-              const h = video?.videoHeight;
-              if (w && h) {
-                window.dispatchEvent(
-                  new CustomEvent("aether:video-size", {
-                    detail: { layerId: layer.id, width: w, height: h }
-                  })
-                );
-              }
-            };
-            video.addEventListener("loadedmetadata", reportSize);
-            video.addEventListener("resize", reportSize as any);
+        Object.assign(video.style, {
+          position: 'absolute',
+          top: '0',
+          left: '0',
+          width: '1px', height: '1px', opacity: '0.01', zIndex: '-10', pointerEvents: 'none',
+        });
 
-            container.appendChild(video);
-            videoElementsRef.current.set(layer.id, video);
+        const forcePlay = () => {
+          if (video && (video.paused || video.ended)) {
+            video.play().catch(() => { });
+          }
+        };
+        video.addEventListener('loadedmetadata', forcePlay);
+        video.addEventListener('canplay', forcePlay);
+        video.addEventListener('pause', forcePlay);
+
+        const reportSize = () => {
+          const w = video?.videoWidth;
+          const h = video?.videoHeight;
+          if (w && h) {
+            window.dispatchEvent(
+              new CustomEvent("aether:video-size", {
+                detail: { layerId: layer.id, width: w, height: h }
+              })
+            );
+          }
+        };
+        video.addEventListener("loadedmetadata", reportSize);
+        video.addEventListener("resize", reportSize as any);
+
+        container.appendChild(video);
+        videoElementsRef.current.set(layer.id, video);
+      }
+
+      if (layer.src instanceof MediaStream) {
+        const currentStream = video.srcObject as MediaStream;
+        if (!currentStream || currentStream.id !== layer.src.id) {
+          video.srcObject = layer.src;
+          video.play().catch(console.error);
+        } else if (video.paused) {
+          video.play().catch(console.error);
         }
-
-        if (layer.src instanceof MediaStream) {
-            const currentStream = video.srcObject as MediaStream;
-            if (!currentStream || currentStream.id !== layer.src.id) {
-                video.srcObject = layer.src;
-                video.play().catch(console.error);
-            } else if (video.paused) {
-                video.play().catch(console.error);
-            }
-        }
+      }
     });
 
   }, [safeLayers]);
@@ -162,52 +173,52 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     let lastRun = 0;
     const TARGET_FPS = 15; // Limit AI to 15fps to save CPU for encoding
     const INTERVAL = 1000 / TARGET_FPS;
-    
+
     const loop = async (now: number) => {
-        if (!active) return;
-        
-        const delta = now - lastRun;
-        
-        if (delta >= INTERVAL) {
-            const seg = segmenterRef.current;
-            if (seg) {
-                // Find layers needing segmentation
-                const layersToProcess = safeLayers.filter(l => 
-                    l.visible && 
-                    l.backgroundRemoval && 
-                    videoElementsRef.current.has(l.id)
-                );
+      if (!active) return;
 
-                for (const layer of layersToProcess) {
-                    const video = videoElementsRef.current.get(layer.id);
-                    if (video && video.readyState >= 2 && !video.paused) {
-                        try {
-                            await new Promise<void>(resolve => {
-                                seg.onResults((results) => {
-                                    if (results.segmentationMask) {
-                                        const maskCache = document.createElement('canvas');
-                                        maskCache.width = results.image.width;
-                                        maskCache.height = results.image.height;
-                                        const mCtx = maskCache.getContext('2d');
-                                        if (mCtx) {
-                                            mCtx.drawImage(results.segmentationMask, 0, 0);
-                                            masksRef.current.set(layer.id, maskCache);
-                                        }
-                                    }
-                                    resolve();
-                                });
-                                seg.send({ image: video });
-                            });
-                        } catch (e) {}
+      const delta = now - lastRun;
+
+      if (delta >= INTERVAL) {
+        const seg = segmenterRef.current;
+        if (seg) {
+          // Find layers needing segmentation
+          const layersToProcess = safeLayers.filter(l =>
+            l.visible &&
+            l.backgroundRemoval &&
+            videoElementsRef.current.has(l.id)
+          );
+
+          for (const layer of layersToProcess) {
+            const video = videoElementsRef.current.get(layer.id);
+            if (video && video.readyState >= 2 && !video.paused) {
+              try {
+                await new Promise<void>(resolve => {
+                  seg.onResults((results) => {
+                    if (results.segmentationMask) {
+                      const maskCache = document.createElement('canvas');
+                      maskCache.width = results.image.width;
+                      maskCache.height = results.image.height;
+                      const mCtx = maskCache.getContext('2d');
+                      if (mCtx) {
+                        mCtx.drawImage(results.segmentationMask, 0, 0);
+                        masksRef.current.set(layer.id, maskCache);
+                      }
                     }
-                }
+                    resolve();
+                  });
+                  seg.send({ image: video });
+                });
+              } catch (e) { }
             }
-            lastRun = now;
+          }
         }
+        lastRun = now;
+      }
 
-        requestAnimationFrame(loop);
+      requestAnimationFrame(loop);
     };
-    
+
     requestAnimationFrame(loop);
     return () => { active = false; };
   }, [safeLayers]);
@@ -224,18 +235,18 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     const clickY = (e.clientY - rect.top) * scaleY;
 
     const clickedLayer = [...safeLayers].sort((a, b) => b.zIndex - a.zIndex).find(layer => {
-        if (!layer.visible) return false;
-        const width = layer.width * (layer.style.scale || 1);
-        const height = layer.height * (layer.style.scale || 1);
-        return (clickX >= layer.x && clickX <= layer.x + width && clickY >= layer.y && clickY <= layer.y + height);
+      if (!layer.visible) return false;
+      const width = layer.width * (layer.style.scale || 1);
+      const height = layer.height * (layer.style.scale || 1);
+      return (clickX >= layer.x && clickX <= layer.x + width && clickY >= layer.y && clickY <= layer.y + height);
     });
 
     if (clickedLayer) {
-        onSelectLayer(clickedLayer.id);
-        setIsDragging(true);
-        setDragOffset({ x: clickX - clickedLayer.x, y: clickY - clickedLayer.y });
+      onSelectLayer(clickedLayer.id);
+      setIsDragging(true);
+      setDragOffset({ x: clickX - clickedLayer.x, y: clickY - clickedLayer.y });
     } else {
-        onSelectLayer(null);
+      onSelectLayer(null);
     }
   };
 
@@ -278,7 +289,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       const height = layer.height * scale;
 
       ctx.save();
-      
+
       // -- Clipping / Rounded Corners --
       ctx.beginPath();
       if (style.circular) {
@@ -295,48 +306,53 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
       // -- Draw Content --
       if (layer.type === SourceType.IMAGE && typeof layer.src === 'string') {
-        const img = new Image();
-        img.src = layer.src;
-        if (img.complete) ctx.drawImage(img, layer.x, layer.y, width, height);
+        // Use persistent image cache instead of creating new Image() per frame
+        let img = imageElementsRef.current.get(layer.id);
+        if (!img || img.src !== layer.src) {
+          img = new Image();
+          img.src = layer.src;
+          imageElementsRef.current.set(layer.id, img);
+        }
+        if (img.complete && img.naturalWidth > 0) ctx.drawImage(img, layer.x, layer.y, width, height);
       } else if ((layer.type === SourceType.CAMERA || layer.type === SourceType.SCREEN) && layer.src) {
-        
+
         const videoElement = videoElementsRef.current.get(layer.id);
-        
+
         if (videoElement && videoElement.readyState >= 2) {
-             
-             // --- BACKGROUND REMOVAL LOGIC ---
-             if (layer.backgroundRemoval && masksRef.current.has(layer.id)) {
-                 const mask = masksRef.current.get(layer.id);
-                 if (mask) {
-                     // Compositing dance:
-                     // 1. Clear offscreen
-                     osCtx.globalCompositeOperation = 'source-over';
-                     osCtx.clearRect(0, 0, osc.width, osc.height);
-                     
-                     // 2. Draw Mask (Grayscale)
-                     // Scaling mask to video size
-                     osCtx.drawImage(mask, 0, 0, osc.width, osc.height);
-                     
-                     // 3. Source-In Video (Keeps video only where mask is white)
-                     osCtx.globalCompositeOperation = 'source-in';
-                     osCtx.drawImage(videoElement, 0, 0, osc.width, osc.height);
-                     
-                     // 4. Draw result to main canvas
-                     ctx.drawImage(osc, 0, 0, osc.width, osc.height, layer.x, layer.y, width, height);
-                 } else {
-                     ctx.drawImage(videoElement, layer.x, layer.y, width, height);
-                 }
-             } else {
-                 ctx.drawImage(videoElement, layer.x, layer.y, width, height);
-             }
+
+          // --- BACKGROUND REMOVAL LOGIC ---
+          if (layer.backgroundRemoval && masksRef.current.has(layer.id)) {
+            const mask = masksRef.current.get(layer.id);
+            if (mask) {
+              // Compositing dance:
+              // 1. Clear offscreen
+              osCtx.globalCompositeOperation = 'source-over';
+              osCtx.clearRect(0, 0, osc.width, osc.height);
+
+              // 2. Draw Mask (Grayscale)
+              // Scaling mask to video size
+              osCtx.drawImage(mask, 0, 0, osc.width, osc.height);
+
+              // 3. Source-In Video (Keeps video only where mask is white)
+              osCtx.globalCompositeOperation = 'source-in';
+              osCtx.drawImage(videoElement, 0, 0, osc.width, osc.height);
+
+              // 4. Draw result to main canvas
+              ctx.drawImage(osc, 0, 0, osc.width, osc.height, layer.x, layer.y, width, height);
+            } else {
+              ctx.drawImage(videoElement, layer.x, layer.y, width, height);
+            }
+          } else {
+            ctx.drawImage(videoElement, layer.x, layer.y, width, height);
+          }
 
         } else {
-             // Placeholder
-             ctx.fillStyle = '#1a0b2e';
-             ctx.fillRect(layer.x, layer.y, width, height);
-             ctx.fillStyle = 'rgba(255,255,255,0.2)';
-             ctx.font = '20px sans-serif';
-             ctx.fillText('Loading...', layer.x + 10, layer.y + 30);
+          // Placeholder
+          ctx.fillStyle = '#1a0b2e';
+          ctx.fillRect(layer.x, layer.y, width, height);
+          ctx.fillStyle = 'rgba(255,255,255,0.2)';
+          ctx.font = '20px sans-serif';
+          ctx.fillText('Loading...', layer.x + 10, layer.y + 30);
         }
       } else if (layer.type === SourceType.TEXT) {
         const baseSize = style.fontSize || 48;
@@ -344,12 +360,12 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
         const family = style.fontFamily || 'Inter';
         const weight = style.fontWeight || 'normal';
         const color = style.color || '#ffffff';
-        
+
         ctx.font = `${weight} ${finalSize}px "${family}"`;
         ctx.fillStyle = color;
         ctx.shadowColor = 'rgba(0,0,0,0.8)';
         ctx.shadowBlur = 4;
-        
+
         const content = layer.content || '';
 
         if (style.scrolling) {
@@ -375,18 +391,18 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       // -- Selection Highlight --
       if (selectedLayerId === layer.id) {
         ctx.save();
-        ctx.strokeStyle = '#d946ef'; 
+        ctx.strokeStyle = '#d946ef';
         ctx.lineWidth = 2;
         if (style.circular) {
-             ctx.beginPath();
-             ctx.arc(layer.x + width / 2, layer.y + height / 2, Math.min(width, height) / 2, 0, Math.PI * 2);
-             ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(layer.x + width / 2, layer.y + height / 2, Math.min(width, height) / 2, 0, Math.PI * 2);
+          ctx.stroke();
         } else if (style.rounded) {
-             ctx.beginPath();
-             ctx.roundRect(layer.x, layer.y, width, height, style.rounded);
-             ctx.stroke();
+          ctx.beginPath();
+          ctx.roundRect(layer.x, layer.y, width, height, style.rounded);
+          ctx.stroke();
         } else {
-             ctx.strokeRect(layer.x, layer.y, width, height);
+          ctx.strokeRect(layer.x, layer.y, width, height);
         }
         ctx.restore();
       }
@@ -394,24 +410,24 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
     // --- WATERMARK (Free Version) ---
     if (!isPro) {
-        ctx.save();
-        const text = "AetherStudio Free";
-        ctx.font = "bold 24px Inter, sans-serif";
-        ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
-        ctx.shadowColor = "rgba(0,0,0,0.8)";
-        ctx.shadowBlur = 4;
-        const metrics = ctx.measureText(text);
-        const pad = 20;
-        ctx.fillText(text, canvas.width - metrics.width - pad, canvas.height - pad);
-        ctx.restore();
+      ctx.save();
+      const text = "AetherStudio Free";
+      ctx.font = "bold 24px Inter, sans-serif";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+      ctx.shadowColor = "rgba(0,0,0,0.8)";
+      ctx.shadowBlur = 4;
+      const metrics = ctx.measureText(text);
+      const pad = 20;
+      ctx.fillText(text, canvas.width - metrics.width - pad, canvas.height - pad);
+      ctx.restore();
     }
 
     if (transitionOverlay && transitionOverlay.alpha > 0) {
-        ctx.save();
-        ctx.globalAlpha = transitionOverlay.alpha;
-        ctx.fillStyle = transitionOverlay.color;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = transitionOverlay.alpha;
+      ctx.fillStyle = transitionOverlay.color;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
     }
 
     requestRef.current = requestAnimationFrame(draw);
@@ -426,14 +442,14 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
   return (
     <div className="w-full h-full flex items-center justify-center bg-[#05010a] relative shadow-2xl overflow-hidden select-none">
-      <div 
+      <div
         ref={hiddenContainerRef}
-        style={{ 
+        style={{
           position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', overflow: 'hidden', zIndex: -1, pointerEvents: 'none',
         }}
       />
-      <canvas 
-        ref={canvasRef} 
+      <canvas
+        ref={canvasRef}
         width={1280} height={720} // Optimized for 720p streaming & AI performance
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}

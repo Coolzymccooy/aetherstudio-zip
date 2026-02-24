@@ -34,7 +34,7 @@ export default function App() {
       const href = window.location.href;
       const search = window.location.search;
       const params = new URLSearchParams(search);
-      
+
       const isCompanion = href.includes('mode=companion') || params.get('mode') === 'companion';
       const roomId = params.get('room');
       const signalUrl = params.get('signal');
@@ -45,7 +45,7 @@ export default function App() {
         if (signalUrl) localStorage.setItem('aether_signal_url', signalUrl);
         localStorage.setItem('aether_mode', 'companion');
         localStorage.setItem('aether_last_view', 'mobile');
-        
+
         setView('mobile');
       }
     };
@@ -63,24 +63,24 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       // If we already have a mock user, don't overwrite with null unless explicit logout
       if (!currentUser && user?.isAnonymous === false && user?.email === 'dev@local.test') {
-          // Keep mock user
+        // Keep mock user
       } else {
-          setUser(currentUser);
+        setUser(currentUser);
       }
       setLoading(false);
 
       // 3. Post-Login Redirection Logic
       if (currentUser) {
         const savedMode = localStorage.getItem('aether_mode');
-        
+
         if (savedMode === 'companion') {
-            setView('mobile');
-            localStorage.setItem('aether_last_view', 'mobile');
+          setView('mobile');
+          localStorage.setItem('aether_last_view', 'mobile');
         } else if (view === 'landing') {
-            const last = localStorage.getItem('aether_last_view');
-            if (last === 'studio') {
-              setView('studio');
-            }
+          const last = localStorage.getItem('aether_last_view');
+          if (last === 'studio') {
+            setView('studio');
+          }
         }
       } else {
         const last = localStorage.getItem('aether_last_view');
@@ -98,53 +98,55 @@ export default function App() {
 
   // Dev Bypass Handler
   const handleDevBypass = () => {
-      const mockUser = {
-          uid: 'dev-123',
-          email: 'dev@local.test',
-          displayName: 'Dev User',
-          emailVerified: true,
-          isAnonymous: false,
-          metadata: {},
-          providerData: [],
-          refreshToken: '',
-          tenantId: null,
-          delete: async () => {},
-          getIdToken: async () => 'mock-token',
-          getIdTokenResult: async () => ({
-              token: 'mock',
-              signInProvider: 'custom',
-              claims: {},
-              authTime: Date.now(),
-              issuedAtTime: Date.now(),
-              expirationTime: Date.now() + 3600000,
-          }),
-          reload: async () => {},
-          toJSON: () => ({}),
-          phoneNumber: null,
-          photoURL: null,
-          providerId: 'custom'
-      } as unknown as User;
-      
-      setUser(mockUser);
-      setView('studio');
-      localStorage.setItem('aether_last_view', 'studio');
-      localStorage.setItem('aether_dev_bypass', 'true');
+    const mockUser = {
+      uid: 'dev-123',
+      email: 'dev@local.test',
+      displayName: 'Dev User',
+      emailVerified: true,
+      isAnonymous: false,
+      metadata: {},
+      providerData: [],
+      refreshToken: '',
+      tenantId: null,
+      delete: async () => { },
+      getIdToken: async () => 'mock-token',
+      getIdTokenResult: async () => ({
+        token: 'mock',
+        signInProvider: 'custom',
+        claims: {},
+        authTime: Date.now(),
+        issuedAtTime: Date.now(),
+        expirationTime: Date.now() + 3600000,
+      }),
+      reload: async () => { },
+      toJSON: () => ({}),
+      phoneNumber: null,
+      photoURL: null,
+      providerId: 'custom'
+    } as unknown as User;
+
+    setUser(mockUser);
+    setView('studio');
+    localStorage.setItem('aether_last_view', 'studio');
+    localStorage.setItem('aether_dev_bypass', 'true');
   };
 
   if (loading) {
     return (
       <div className="min-h-screen bg-[#0f0518] flex items-center justify-center text-white">
         <div className="flex flex-col items-center gap-4">
-           <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-aether-500 to-fuchsia-500 flex items-center justify-center animate-pulse">
-              <Loader2 className="animate-spin" />
-           </div>
-           <p className="text-sm text-gray-400 font-mono">Initializing Aether Secure Core...</p>
+          <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-aether-500 to-fuchsia-500 flex items-center justify-center animate-pulse">
+            <Loader2 className="animate-spin" />
+          </div>
+          <p className="text-sm text-gray-400 font-mono">Initializing Aether Secure Core...</p>
         </div>
       </div>
     );
   }
 
-  if (!hasFirebaseConfig) {
+  // On packaged desktop apps, bypass Firebase missing-config screen and allow
+  // straight into Studio. Web deployments still require Firebase config.
+  if (!hasFirebaseConfig && !isDesktopRuntime) {
     return (
       <div className="min-h-screen bg-[#0f0518] text-white flex items-center justify-center p-6">
         <div className="max-w-md w-full bg-aether-900 border border-red-500/30 rounded-2xl p-8 shadow-2xl text-center">
@@ -175,13 +177,13 @@ export default function App() {
   if (view === 'studio') {
     // Enforce Auth for Studio (optional, but good for analytics)
     if (!user) {
-       if (isDesktopRuntime) {
-         handleDevBypass();
-         return null;
-       }
-       // If somehow here without user, fallback to landing to sign in
-       setView('landing');
-       return null;
+      if (isDesktopRuntime) {
+        handleDevBypass();
+        return null;
+      }
+      // If somehow here without user, fallback to landing to sign in
+      setView('landing');
+      return null;
     }
     return (
       <StudioCore
@@ -197,7 +199,7 @@ export default function App() {
   }
 
   return (
-    <LandingPage 
+    <LandingPage
       user={user}
       onEnterStudio={() => { setView('studio'); localStorage.setItem('aether_last_view', 'studio'); }}
       onOpenMobileMode={() => { setView('mobile'); localStorage.setItem('aether_last_view', 'mobile'); }}

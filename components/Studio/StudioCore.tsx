@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Monitor, Camera, Image as ImageIcon, Type, Circle, Zap, Settings, PlaySquare, StopCircle, Radio, X, Sliders, Sparkles, Download, Package, FolderInput, Network, ExternalLink, AlertCircle, Smartphone, HelpCircle, Disc, Square, Cloud, LogOut, Link as LinkIcon, RefreshCw, Activity, Tv } from 'lucide-react';
-import { getPeerEnv} from "../../src/utils/peerEnv";
+import { getPeerEnv } from "../../src/utils/peerEnv";
 import { CanvasStage } from './CanvasStage';
 import { AudioMixer } from './AudioMixer';
 import { AIPanel } from '../AI/AIPanel';
@@ -18,6 +18,15 @@ import Peer, { DataConnection, MediaConnection } from "peerjs";
 const generateId = () => Math.random().toString(36).substr(2, 9);
 const MAX_PHONE_CAMS = (() => {
   const raw = Number((import.meta as any).env?.VITE_MAX_PHONE_CAMS ?? 4);
+  if (!Number.isFinite(raw) || raw < 1) return 4;
+  return Math.floor(raw);
+})();
+
+// Stability-first: cap the number of camera sources actively composed into the
+// program output. Extra cameras stay connected but are excluded from the canvas
+// composition to prevent stream collapse and encoder stalls.
+const MAX_COMPOSED_CAMERAS = (() => {
+  const raw = Number((import.meta as any).env?.VITE_MAX_COMPOSED_CAMERAS ?? 4);
   if (!Number.isFinite(raw) || raw < 1) return 4;
   return Math.floor(raw);
 })();
@@ -51,11 +60,10 @@ const SourceButton: React.FC<{ icon: React.ReactNode; label: string; onClick: ()
   <button
     onClick={onClick}
     disabled={disabled}
-    className={`group relative p-3 rounded-xl transition-all flex items-center justify-center ${
-      disabled
-        ? 'text-gray-600 cursor-not-allowed opacity-50'
-        : 'text-gray-400 hover:text-white hover:bg-aether-700/50'
-    }`}
+    className={`group relative p-3 rounded-xl transition-all flex items-center justify-center ${disabled
+      ? 'text-gray-600 cursor-not-allowed opacity-50'
+      : 'text-gray-400 hover:text-white hover:bg-aether-700/50'
+      }`}
   >
     {icon}
     <div className="absolute left-14 top-1/2 -translate-y-1/2 px-2 py-1 bg-black/80 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 border border-white/10 backdrop-blur-sm">
@@ -147,7 +155,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [showQRModal, setShowQRModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [cloudError, setCloudError] = useState<string | null>(null);
-  const [incomingRes, setIncomingRes] = useState<string>(""); 
+  const [incomingRes, setIncomingRes] = useState<string>("");
   const [micPickerTrackId, setMicPickerTrackId] = useState<string | null>(null);
   const [availableMics, setAvailableMics] = useState<MediaDeviceInfo[]>([]);
   const [streamKey, setStreamKey] = useState(() => localStorage.getItem('aether_stream_key') || '');
@@ -246,26 +254,26 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [transitionAlpha, setTransitionAlpha] = useState(0);
 
   const [peerMode, setPeerMode] = useState<'cloud' | 'custom'>(() => {
-     return (localStorage.getItem('aether_peer_mode') as any) || 'cloud';
+    return (localStorage.getItem('aether_peer_mode') as any) || 'cloud';
   });
   const [peerUiMode, setPeerUiMode] = useState<'auto' | 'local' | 'advanced'>(() => {
-     return (localStorage.getItem('aether_peer_ui_mode') as any) || 'auto';
+    return (localStorage.getItem('aether_peer_ui_mode') as any) || 'auto';
   });
   const [peerHost, setPeerHost] = useState(() => localStorage.getItem('aether_peer_host') || 'localhost');
   const [peerPort, setPeerPort] = useState(() => localStorage.getItem('aether_peer_port') || '9000');
   const [peerPath, setPeerPath] = useState(() => localStorage.getItem('aether_peer_path') || '/peerjs');
   const [peerSecure, setPeerSecure] = useState(() => {
-     const raw = localStorage.getItem('aether_peer_secure');
-     if (raw === null) return false;
-     return raw === 'true';
+    const raw = localStorage.getItem('aether_peer_secure');
+    if (raw === null) return false;
+    return raw === 'true';
   });
-  
+
   const [roomId, setRoomId] = useState(() => {
-     const saved = localStorage.getItem('aether_host_room_id');
-     if (saved) return saved;
-     const newId = generateRoomId(); 
-     localStorage.setItem('aether_host_room_id', newId);
-     return newId;
+    const saved = localStorage.getItem('aether_host_room_id');
+    if (saved) return saved;
+    const newId = generateRoomId();
+    localStorage.setItem('aether_host_room_id', newId);
+    return newId;
   });
 
   const normalizedLicenseKey = licenseKey.trim().toUpperCase();
@@ -290,7 +298,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const localChunksRef = useRef<Blob[]>([]);
   const settingsPanelRef = useRef<HTMLDivElement | null>(null);
   const settingsDragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
-  
+
   // Audio Refs
   const audioContext = useRef<AudioContext | null>(null);
   const audioDestination = useRef<MediaStreamAudioDestinationNode | null>(null);
@@ -395,24 +403,24 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   useEffect(() => {
     const resumeAudio = () => {
       if (audioContext.current?.state === 'suspended') {
-        audioContext.current.resume().catch(() => {});
+        audioContext.current.resume().catch(() => { });
       }
     };
     window.addEventListener('click', resumeAudio);
     window.addEventListener('keydown', resumeAudio);
     return () => {
-        window.removeEventListener('click', resumeAudio);
-        window.removeEventListener('keydown', resumeAudio);
+      window.removeEventListener('click', resumeAudio);
+      window.removeEventListener('keydown', resumeAudio);
     };
   }, []);
 
   // Persist Settings
   useEffect(() => {
-      localStorage.setItem('aether_stream_key', streamKey);
+    localStorage.setItem('aether_stream_key', streamKey);
   }, [streamKey]);
 
   useEffect(() => {
-      localStorage.setItem('aether_license_key', normalizedLicenseKey);
+    localStorage.setItem('aether_license_key', normalizedLicenseKey);
   }, [normalizedLicenseKey]);
 
   useEffect(() => {
@@ -425,7 +433,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   }, [adminToken]);
 
   useEffect(() => {
-      localStorage.setItem('aether_wifi_mode', wifiMode ? 'true' : 'false');
+    localStorage.setItem('aether_wifi_mode', wifiMode ? 'true' : 'false');
   }, [wifiMode]);
 
   useEffect(() => {
@@ -433,31 +441,31 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   }, [streamQuality]);
 
   useEffect(() => {
-      localStorage.setItem('aether_auto_director', String(autoDirectorOn));
-      localStorage.setItem('aether_auto_director_interval', String(autoDirectorInterval || 12));
+    localStorage.setItem('aether_auto_director', String(autoDirectorOn));
+    localStorage.setItem('aether_auto_director_interval', String(autoDirectorInterval || 12));
   }, [autoDirectorOn, autoDirectorInterval]);
 
   useEffect(() => {
-      localStorage.setItem('aether_lower_third_name', lowerThirdName);
-      localStorage.setItem('aether_lower_third_title', lowerThirdTitle);
+    localStorage.setItem('aether_lower_third_name', lowerThirdName);
+    localStorage.setItem('aether_lower_third_title', lowerThirdTitle);
   }, [lowerThirdName, lowerThirdTitle]);
 
   useEffect(() => {
-      localStorage.setItem('aether_pinned_message', pinnedMessage);
-      localStorage.setItem('aether_ticker_message', tickerMessage);
+    localStorage.setItem('aether_pinned_message', pinnedMessage);
+    localStorage.setItem('aether_ticker_message', tickerMessage);
   }, [pinnedMessage, tickerMessage]);
 
   useEffect(() => {
-      localStorage.setItem('aether_stream_destinations', JSON.stringify(destinations));
+    localStorage.setItem('aether_stream_destinations', JSON.stringify(destinations));
   }, [destinations]);
 
   useEffect(() => {
-      localStorage.setItem('aether_scene_presets', JSON.stringify(scenePresets));
+    localStorage.setItem('aether_scene_presets', JSON.stringify(scenePresets));
   }, [scenePresets]);
 
   useEffect(() => {
-      localStorage.setItem('aether_transition_mode', transitionMode);
-      localStorage.setItem('aether_transition_ms', String(transitionMs || 300));
+    localStorage.setItem('aether_transition_mode', transitionMode);
+    localStorage.setItem('aether_transition_ms', String(transitionMs || 300));
   }, [transitionMode, transitionMs]);
 
   // UI Tab Switching
@@ -505,7 +513,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       }
     });
     return () => {
-      try { off?.(); } catch {}
+      try { off?.(); } catch { }
     };
   }, [desktopUpdater]);
 
@@ -558,7 +566,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     setIssueStatus({ state: 'ok', key: res.key, message: 'License issued.' });
     try {
       await navigator.clipboard?.writeText(res.key);
-    } catch {}
+    } catch { }
   }, [adminToken, issueDays, issueEmail]);
 
   useEffect(() => {
@@ -647,13 +655,13 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   // Video Resolution Event Listener
   useEffect(() => {
     const onSize = (e: Event) => {
-        const evt = e as CustomEvent<{ layerId: string; width: number; height: number }>;
-        const mobileId = mobileCamLayerIdRef.current;
-        if (!mobileId) return;
+      const evt = e as CustomEvent<{ layerId: string; width: number; height: number }>;
+      const mobileId = mobileCamLayerIdRef.current;
+      if (!mobileId) return;
 
-        if (evt.detail?.layerId === mobileId) {
+      if (evt.detail?.layerId === mobileId) {
         setIncomingRes(`${evt.detail.width}×${evt.detail.height}`);
-        }
+      }
     };
     window.addEventListener("aether:video-size", onSize as any);
     return () => window.removeEventListener("aether:video-size", onSize as any);
@@ -662,9 +670,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   // --- AUDIO ENGINE ---
   useEffect(() => {
     if (!audioContext.current) {
-        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-        audioContext.current = new AudioContextClass();
-        audioDestination.current = audioContext.current.createMediaStreamDestination();
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      audioContext.current = new AudioContextClass();
+      audioDestination.current = audioContext.current.createMediaStreamDestination();
     }
     const ctx = audioContext.current;
     const dest = audioDestination.current;
@@ -673,49 +681,49 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     // Cleanup removed tracks
     const currentIds = new Set(audioTracks.map(t => t.id));
     audioSources.current.forEach((_, id) => {
-        if (!currentIds.has(id)) {
-            audioSources.current.get(id)?.disconnect();
-            audioGains.current.get(id)?.disconnect();
-            audioFilters.current.get(id)?.disconnect();
-            audioSources.current.delete(id);
-            audioGains.current.delete(id);
-            audioFilters.current.delete(id);
-            hyperGateNodes.current.delete(id);
-        }
+      if (!currentIds.has(id)) {
+        audioSources.current.get(id)?.disconnect();
+        audioGains.current.get(id)?.disconnect();
+        audioFilters.current.get(id)?.disconnect();
+        audioSources.current.delete(id);
+        audioGains.current.delete(id);
+        audioFilters.current.delete(id);
+        hyperGateNodes.current.delete(id);
+      }
     });
 
     // Add/Update tracks
     audioTracks.forEach(track => {
-        if (!track.stream) return;
-        
-        if (!audioSources.current.has(track.id)) {
-            const source = ctx.createMediaStreamSource(track.stream);
-            
-            // HyperGate Chain
-            const hg = createHyperGateChain(ctx);
-            source.connect(hg.input);
-            
-            // Filter & Gain
-            const filter = ctx.createBiquadFilter();
-            const gain = ctx.createGain();
-            
-            hg.gate.connect(filter);
-            filter.connect(gain);
-            gain.connect(dest);
+      if (!track.stream) return;
 
-            audioSources.current.set(track.id, source);
-            audioGains.current.set(track.id, gain);
-            audioFilters.current.set(track.id, filter);
-            hyperGateNodes.current.set(track.id, hg);
-        }
+      if (!audioSources.current.has(track.id)) {
+        const source = ctx.createMediaStreamSource(track.stream);
 
-        const gainNode = audioGains.current.get(track.id);
-        if (gainNode) {
-            gainNode.gain.setTargetAtTime(track.muted ? 0 : (track.volume / 100), ctx.currentTime, 0.05);
-        }
+        // HyperGate Chain
+        const hg = createHyperGateChain(ctx);
+        source.connect(hg.input);
+
+        // Filter & Gain
+        const filter = ctx.createBiquadFilter();
+        const gain = ctx.createGain();
+
+        hg.gate.connect(filter);
+        filter.connect(gain);
+        gain.connect(dest);
+
+        audioSources.current.set(track.id, source);
+        audioGains.current.set(track.id, gain);
+        audioFilters.current.set(track.id, filter);
+        hyperGateNodes.current.set(track.id, hg);
+      }
+
+      const gainNode = audioGains.current.get(track.id);
+      if (gainNode) {
+        gainNode.gain.setTargetAtTime(track.muted ? 0 : (track.volume / 100), ctx.currentTime, 0.05);
+      }
     });
 
-    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    if (ctx.state === 'suspended') ctx.resume().catch(() => { });
   }, [audioTracks]);
 
   // HyperGate Processing Loop
@@ -724,37 +732,37 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     if (!ctx) return;
 
     const timer = window.setInterval(() => {
-        const now = Date.now();
-        hyperGateNodes.current.forEach((nodes, trackId) => {
-            const track = audioTracks.find(t => t.id === trackId);
-            if (!track || !track.noiseCancellation) return;
+      const now = Date.now();
+      hyperGateNodes.current.forEach((nodes, trackId) => {
+        const track = audioTracks.find(t => t.id === trackId);
+        if (!track || !track.noiseCancellation) return;
 
-            const st = hyperGateState.current.get(trackId) || { isOpen: true, lastAboveMs: now, lastDb: -120 };
-            const db = rmsDbFromAnalyser(nodes.analyser);
-            st.lastDb = db;
+        const st = hyperGateState.current.get(trackId) || { isOpen: true, lastAboveMs: now, lastDb: -120 };
+        const db = rmsDbFromAnalyser(nodes.analyser);
+        st.lastDb = db;
 
-            const thresholdDb = -45;
-            const holdMs = 220;
-            const openGain = 1.0;
-            const closedGain = 0.03;
-            const attack = 0.02;
-            const release = 0.10;
+        const thresholdDb = -45;
+        const holdMs = 220;
+        const openGain = 1.0;
+        const closedGain = 0.03;
+        const attack = 0.02;
+        const release = 0.10;
 
-            if (db > thresholdDb) {
-                st.lastAboveMs = now;
-                if (!st.isOpen) {
-                    nodes.gate.gain.setTargetAtTime(openGain, ctx.currentTime, attack);
-                    st.isOpen = true;
-                }
-            } else {
-                const since = now - st.lastAboveMs;
-                if (since > holdMs && st.isOpen) {
-                    nodes.gate.gain.setTargetAtTime(closedGain, ctx.currentTime, release);
-                    st.isOpen = false;
-                }
-            }
-            hyperGateState.current.set(trackId, st);
-        });
+        if (db > thresholdDb) {
+          st.lastAboveMs = now;
+          if (!st.isOpen) {
+            nodes.gate.gain.setTargetAtTime(openGain, ctx.currentTime, attack);
+            st.isOpen = true;
+          }
+        } else {
+          const since = now - st.lastAboveMs;
+          if (since > holdMs && st.isOpen) {
+            nodes.gate.gain.setTargetAtTime(closedGain, ctx.currentTime, release);
+            st.isOpen = false;
+          }
+        }
+        hyperGateState.current.set(trackId, st);
+      });
     }, 60);
     return () => window.clearInterval(timer);
   }, [audioTracks]);
@@ -765,414 +773,414 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     const peerEnv = getPeerEnv();
 
     const rotateRoomId = () => {
-        const newId = generateRoomId();
-        localStorage.setItem("aether_host_room_id", newId);
-        setRoomId(newId);
-        setStatusMsg({ type: "info", text: "Room ID was in use. New room generated." });
+      const newId = generateRoomId();
+      localStorage.setItem("aether_host_room_id", newId);
+      setRoomId(newId);
+      setStatusMsg({ type: "info", text: "Room ID was in use. New room generated." });
     };
 
     const scheduleCloudOffline = () => {
-        if (cloudDisconnectTimerRef.current) window.clearTimeout(cloudDisconnectTimerRef.current);
-        cloudDisconnectTimerRef.current = window.setTimeout(() => {
-            setCloudConnected(false);
-            setStatusMsg({ type: "warn", text: "Cloud disconnected. Reconnecting..." });
-        }, 1500);
+      if (cloudDisconnectTimerRef.current) window.clearTimeout(cloudDisconnectTimerRef.current);
+      cloudDisconnectTimerRef.current = window.setTimeout(() => {
+        setCloudConnected(false);
+        setStatusMsg({ type: "warn", text: "Cloud disconnected. Reconnecting..." });
+      }, 1500);
     };
 
     const clearCloudOffline = () => {
-        if (cloudDisconnectTimerRef.current) {
-            window.clearTimeout(cloudDisconnectTimerRef.current);
-            cloudDisconnectTimerRef.current = null;
-        }
+      if (cloudDisconnectTimerRef.current) {
+        window.clearTimeout(cloudDisconnectTimerRef.current);
+        cloudDisconnectTimerRef.current = null;
+      }
     };
 
     // Cleanup old peer if ID changed
     const existing: any = peerRef.current;
     if (existing && !existing.destroyed && existing.id !== myPeerId) {
-        try { existing.destroy(); } catch {}
-        peerRef.current = null;
+      try { existing.destroy(); } catch { }
+      peerRef.current = null;
     }
 
     // Keepalive loop
     if (keepAliveRef.current) {
-        window.clearInterval(keepAliveRef.current);
-        keepAliveRef.current = null;
+      window.clearInterval(keepAliveRef.current);
+      keepAliveRef.current = null;
     }
 
     // Reuse existing peer if valid
     const stillAlive: any = peerRef.current;
     if (stillAlive && !stillAlive.destroyed && stillAlive.id === myPeerId) {
-        if (stillAlive.id) setPeerId(stillAlive.id);
-        if (!stillAlive.disconnected) {
-            setCloudConnected(true);
-            setCloudError(null);
-        }
+      if (stillAlive.id) setPeerId(stillAlive.id);
+      if (!stillAlive.disconnected) {
+        setCloudConnected(true);
+        setCloudError(null);
+      }
     } else {
-        // Create new Peer
-        const peer = new Peer(myPeerId, {
-            debug: 1,
-            host: peerEnv.host,
-            port: peerEnv.port,
-            path: peerEnv.path,
-            secure: peerEnv.secure,
-            config: {
-                iceServers: [
-                    { urls: "stun:stun.l.google.com:19302" },
-                    { urls: "stun:stun1.l.google.com:19302" },
-                ],
-            },
-        });
-        peerRef.current = peer;
+      // Create new Peer
+      const peer = new Peer(myPeerId, {
+        debug: 1,
+        host: peerEnv.host,
+        port: peerEnv.port,
+        path: peerEnv.path,
+        secure: peerEnv.secure,
+        config: {
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+          ],
+        },
+      });
+      peerRef.current = peer;
 
-        peer.on("open", (id) => {
-            setPeerId(id);
-            clearCloudOffline();
-            setCloudConnected(true);
-            setCloudError(null);
-            setStatusMsg({ type: "info", text: "Cloud Online." });
-        });
+      peer.on("open", (id) => {
+        setPeerId(id);
+        clearCloudOffline();
+        setCloudConnected(true);
+        setCloudError(null);
+        setStatusMsg({ type: "info", text: "Cloud Online." });
+      });
 
-        peer.on("disconnected", () => {
-            scheduleCloudOffline();
-            try { (peer as any).reconnect?.(); } catch {}
-        });
+      peer.on("disconnected", () => {
+        scheduleCloudOffline();
+        try { (peer as any).reconnect?.(); } catch { }
+      });
 
-        peer.on("close", () => {
-            clearCloudOffline();
-            setCloudConnected(false);
-            setStatusMsg({ type: "warn", text: "Cloud closed." });
-        });
+      peer.on("close", () => {
+        clearCloudOffline();
+        setCloudConnected(false);
+        setStatusMsg({ type: "warn", text: "Cloud closed." });
+      });
 
-        peer.on("error", (err: any) => {
-            console.error("[Cloud] Error:", err?.type, err?.message, err);
-            scheduleCloudOffline();
-            setCloudError(err?.type || "error");
-            if (err?.type === "unavailable-id") {
-                rotateRoomId();
+      peer.on("error", (err: any) => {
+        console.error("[Cloud] Error:", err?.type, err?.message, err);
+        scheduleCloudOffline();
+        setCloudError(err?.type || "error");
+        if (err?.type === "unavailable-id") {
+          rotateRoomId();
+        }
+      });
+
+      peer.on("connection", (conn) => {
+        conn.on("data", (data: any) => {
+          if (data?.type === "mobile-handshake") {
+            mobileMetaRef.current.set(conn.peer, {
+              sourceId: data.sourceId,
+              label: data.label,
+            });
+          }
+        });
+      });
+
+      peer.on("call", (call) => {
+        setStatusMsg({ type: "info", text: "Mobile Camera Incoming..." });
+        const getSourceMeta = () => {
+          const metaFromCall: any = (call as any).metadata || {};
+          const metaFromConn = mobileMetaRef.current.get(call.peer) || {};
+          const sourceId = metaFromCall.sourceId || metaFromConn.sourceId;
+          const label = metaFromCall.label || metaFromConn.label || "Phone Cam";
+          return { sourceId, label };
+        };
+        const registerSourceCall = (sourceId?: string) => {
+          if (!sourceId) return;
+          const existing = phoneCallsRef.current.get(sourceId);
+          if (existing && existing !== call) {
+            try { existing.close(); } catch { }
+          }
+          phoneCallsRef.current.set(sourceId, call);
+        };
+        const markSourceDisconnected = (sourceId?: string) => {
+          if (!sourceId) return;
+          const activeCall = phoneCallsRef.current.get(sourceId);
+          if (activeCall && activeCall !== call) return;
+          phoneCallsRef.current.delete(sourceId);
+          setCameraSources(prev => prev.map((s) => {
+            if (s.id !== sourceId) return s;
+            if (s.stream) {
+              try { s.stream.getTracks().forEach((t) => t.stop()); } catch { }
             }
+            return { ...s, status: 'failed', stream: undefined, peerId: undefined };
+          }));
+          setLayers(prev => {
+            const source = cameraSourcesRef.current.find((s) => s.id === sourceId);
+            if (!source?.layerId) return prev;
+            return prev.map((l) => l.id === source.layerId ? { ...l, src: undefined } : l);
+          });
+          setAudioTracks(prev => prev.map((t) => t.id === `mobile-mic-${sourceId}` ? { ...t, stream: undefined, muted: true } : t));
+        };
+        const initialMeta = getSourceMeta();
+        registerSourceCall(initialMeta.sourceId);
+        call.answer();
+        call.on("stream", (remoteStream) => {
+          const meta = getSourceMeta();
+          const sourceId = meta.sourceId || generateId();
+          const label = meta.label;
+          registerSourceCall(sourceId);
+          handleMobileStream(remoteStream, sourceId, label, call.peer);
         });
-
-        peer.on("connection", (conn) => {
-            conn.on("data", (data: any) => {
-                if (data?.type === "mobile-handshake") {
-                    mobileMetaRef.current.set(conn.peer, {
-                        sourceId: data.sourceId,
-                        label: data.label,
-                    });
-                }
-            });
+        call.on("close", () => {
+          const meta = getSourceMeta();
+          markSourceDisconnected(meta.sourceId);
+          mobileMetaRef.current.delete(call.peer);
         });
-
-        peer.on("call", (call) => {
-            setStatusMsg({ type: "info", text: "Mobile Camera Incoming..." });
-            const getSourceMeta = () => {
-                const metaFromCall: any = (call as any).metadata || {};
-                const metaFromConn = mobileMetaRef.current.get(call.peer) || {};
-                const sourceId = metaFromCall.sourceId || metaFromConn.sourceId;
-                const label = metaFromCall.label || metaFromConn.label || "Phone Cam";
-                return { sourceId, label };
-            };
-            const registerSourceCall = (sourceId?: string) => {
-                if (!sourceId) return;
-                const existing = phoneCallsRef.current.get(sourceId);
-                if (existing && existing !== call) {
-                    try { existing.close(); } catch {}
-                }
-                phoneCallsRef.current.set(sourceId, call);
-            };
-            const markSourceDisconnected = (sourceId?: string) => {
-                if (!sourceId) return;
-                const activeCall = phoneCallsRef.current.get(sourceId);
-                if (activeCall && activeCall !== call) return;
-                phoneCallsRef.current.delete(sourceId);
-                setCameraSources(prev => prev.map((s) => {
-                  if (s.id !== sourceId) return s;
-                  if (s.stream) {
-                    try { s.stream.getTracks().forEach((t) => t.stop()); } catch {}
-                  }
-                  return { ...s, status: 'failed', stream: undefined, peerId: undefined };
-                }));
-                setLayers(prev => {
-                  const source = cameraSourcesRef.current.find((s) => s.id === sourceId);
-                  if (!source?.layerId) return prev;
-                  return prev.map((l) => l.id === source.layerId ? { ...l, src: undefined } : l);
-                });
-                setAudioTracks(prev => prev.map((t) => t.id === `mobile-mic-${sourceId}` ? { ...t, stream: undefined, muted: true } : t));
-            };
-            const initialMeta = getSourceMeta();
-            registerSourceCall(initialMeta.sourceId);
-            call.answer();
-            call.on("stream", (remoteStream) => {
-                const meta = getSourceMeta();
-                const sourceId = meta.sourceId || generateId();
-                const label = meta.label;
-                registerSourceCall(sourceId);
-                handleMobileStream(remoteStream, sourceId, label, call.peer);
-            });
-            call.on("close", () => {
-                const meta = getSourceMeta();
-                markSourceDisconnected(meta.sourceId);
-                mobileMetaRef.current.delete(call.peer);
-            });
-            call.on("error", () => {
-                const meta = getSourceMeta();
-                markSourceDisconnected(meta.sourceId);
-                mobileMetaRef.current.delete(call.peer);
-            });
+        call.on("error", () => {
+          const meta = getSourceMeta();
+          markSourceDisconnected(meta.sourceId);
+          mobileMetaRef.current.delete(call.peer);
         });
+      });
     }
 
     // Keepalive Interval
     keepAliveRef.current = window.setInterval(() => {
-        const p: any = peerRef.current;
-        if (!p) return;
-        if (p.disconnected) {
-            try { p.reconnect(); } catch {}
-        }
+      const p: any = peerRef.current;
+      if (!p) return;
+      if (p.disconnected) {
+        try { p.reconnect(); } catch { }
+      }
     }, 5000);
 
     // Sync Timer
     if (cloudSyncTimerRef.current) window.clearInterval(cloudSyncTimerRef.current);
     cloudSyncTimerRef.current = window.setInterval(() => {
-        const p: any = peerRef.current;
-        if (!p || p.destroyed) return;
-        if (p.open) {
-            setCloudConnected((prev) => (prev ? prev : true));
-            setCloudError(null);
-        }
+      const p: any = peerRef.current;
+      if (!p || p.destroyed) return;
+      if (p.open) {
+        setCloudConnected((prev) => (prev ? prev : true));
+        setCloudError(null);
+      }
     }, 1000);
 
     // Relay Connection
     let ws: WebSocket | null = null;
     let relayRetryTimer: number | null = null;
-    
+
     const wsUrl = getRelayWsUrl();
 
     const connectRelay = () => {
-        if (!wsUrl) {
-            setRelayConnected(false);
-            setRelayStatus("Relay URL not configured");
+      if (!wsUrl) {
+        setRelayConnected(false);
+        setRelayStatus("Relay URL not configured");
+        return;
+      }
+      const pageIsHttps = window.location.protocol === "https:";
+      const pageHost = window.location.hostname;
+      const pageIsLocal = pageHost === "localhost" || pageHost === "127.0.0.1";
+      if (pageIsHttps && wsUrl.startsWith("ws://")) {
+        setRelayConnected(false);
+        setRelayStatus("Invalid relay URL for HTTPS page");
+        setStatusMsg({
+          type: "error",
+          text: "Relay URL uses ws:// on an HTTPS page. Use wss:// relay URL, or run the app locally at http://localhost:5174.",
+          persistent: true,
+        });
+        return;
+      }
+      if (!pageIsLocal && /^(ws|wss):\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(wsUrl)) {
+        setRelayConnected(false);
+        setRelayStatus("Local relay URL cannot be used from deployed app");
+        setStatusMsg({
+          type: "error",
+          text: "You are on a deployed app host, but relay URL points to localhost. Use local app for local relay, or set public wss relay URL.",
+          persistent: true,
+        });
+        return;
+      }
+      try {
+        ws = new WebSocket(wsUrl);
+        streamingSocketRef.current = ws;
+
+        ws.onopen = () => {
+          setRelayConnected(true);
+          setRelayStatus("Relay connected");
+          ws?.send(JSON.stringify({
+            type: "join",
+            role: "host",
+            sessionId: roomId,
+            token: import.meta.env.VITE_RELAY_TOKEN,
+          }));
+          if (liveIntentRef.current) {
+            const now = Date.now();
+            if (now - liveStartGuardRef.current > 1500) {
+              liveStartGuardRef.current = now;
+              startStreamingSession({ fromReconnect: true, forceRestart: false });
+              setStatusMsg({ type: 'info', text: "Relay reconnected. Resuming stream..." });
+            }
+          }
+        };
+
+        ws.onclose = (ev) => {
+          setRelayConnected(false);
+          setRelayStatus(`Relay closed (${ev.code})`);
+          setStreamHealth((prev) => ({ ...prev, rttMs: null }));
+          if (ev.code === 4001) {
+            setStatusMsg({ type: 'warn', text: "Another Studio host tab is active for this room. This tab will stay disconnected." });
+            liveIntentRef.current = false;
             return;
-        }
-        const pageIsHttps = window.location.protocol === "https:";
-        const pageHost = window.location.hostname;
-        const pageIsLocal = pageHost === "localhost" || pageHost === "127.0.0.1";
-        if (pageIsHttps && wsUrl.startsWith("ws://")) {
-            setRelayConnected(false);
-            setRelayStatus("Invalid relay URL for HTTPS page");
-            setStatusMsg({
-              type: "error",
-              text: "Relay URL uses ws:// on an HTTPS page. Use wss:// relay URL, or run the app locally at http://localhost:5174.",
-              persistent: true,
-            });
-            return;
-        }
-        if (!pageIsLocal && /^(ws|wss):\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(wsUrl)) {
-            setRelayConnected(false);
-            setRelayStatus("Local relay URL cannot be used from deployed app");
-            setStatusMsg({
-              type: "error",
-              text: "You are on a deployed app host, but relay URL points to localhost. Use local app for local relay, or set public wss relay URL.",
-              persistent: true,
-            });
-            return;
-        }
-        try {
-            ws = new WebSocket(wsUrl);
-            streamingSocketRef.current = ws;
+          }
+          if (liveIntentRef.current) {
+            setStatusMsg({ type: 'warn', text: "Relay lost. Attempting to reconnect..." });
+          }
+          if (relayRetryTimer) window.clearTimeout(relayRetryTimer);
+          relayRetryTimer = window.setTimeout(connectRelay, 1500);
+        };
 
-            ws.onopen = () => {
-                setRelayConnected(true);
-                setRelayStatus("Relay connected");
-                ws?.send(JSON.stringify({
-                    type: "join",
-                    role: "host",
-                    sessionId: roomId,
-                    token: import.meta.env.VITE_RELAY_TOKEN,
-                }));
-                if (liveIntentRef.current) {
-                    const now = Date.now();
-                    if (now - liveStartGuardRef.current > 1500) {
-                        liveStartGuardRef.current = now;
-                        startStreamingSession({ fromReconnect: true, forceRestart: false });
-                        setStatusMsg({ type: 'info', text: "Relay reconnected. Resuming stream..." });
-                    }
-                }
-            };
+        ws.onerror = () => {
+          setRelayConnected(false);
+          setStatusMsg({ type: "error", text: "Relay connection failed" });
+        };
 
-            ws.onclose = (ev) => {
-                setRelayConnected(false);
-                setRelayStatus(`Relay closed (${ev.code})`);
-                setStreamHealth((prev) => ({ ...prev, rttMs: null }));
-                if (ev.code === 4001) {
-                  setStatusMsg({ type: 'warn', text: "Another Studio host tab is active for this room. This tab will stay disconnected." });
-                  liveIntentRef.current = false;
-                  return;
-                }
-                if (liveIntentRef.current) {
-                    setStatusMsg({ type: 'warn', text: "Relay lost. Attempting to reconnect..." });
-                }
-                if (relayRetryTimer) window.clearTimeout(relayRetryTimer);
-                relayRetryTimer = window.setTimeout(connectRelay, 1500);
-            };
-
-            ws.onerror = () => {
-                setRelayConnected(false);
-                setStatusMsg({ type: "error", text: "Relay connection failed" });
-            };
-
-            ws.onmessage = (ev) => {
-                try {
-                    const msg = JSON.parse(String(ev.data || "{}"));
-                    if (msg?.type === "pong" && msg?.echo) {
-                        const rtt = Date.now() - Number(msg.echo);
-                        setStreamHealth((prev) => ({ ...prev, rttMs: rtt }));
-                        return;
-                    }
-                    if (msg?.type === "started") setRelayStatus("Relay streaming");
-                    if (msg?.type === "ffmpeg_restarting") {
-                      setRelayStatus(`Relay restarting (attempt ${msg?.attempt || "?"})`);
-                    }
-                    if (msg?.type === "ffmpeg_error") {
-                      setRelayStatus(`Relay ffmpeg warning: ${msg?.message || "unknown"}`);
-                    }
-                    if (msg?.type === "relay_congestion") {
-                      if (msg?.level === "hard") {
-                        setRelayStatus("Relay congestion hard limit reached");
-                        setStatusMsg({ type: "error", text: "Relay congestion exceeded hard limit. Stream stopping." });
-                      } else if (msg?.level === "soft") {
-                        setRelayStatus("Relay congestion detected");
-                      } else if (msg?.level === "recovered") {
-                        setRelayStatus("Relay congestion recovered");
-                      }
-                    }
-                    if (msg?.type === "destination_status" && (msg?.status === "degraded" || msg?.status === "down")) {
-                      const target = msg?.target ? ` (${msg.target})` : "";
-                      setRelayStatus(`Destination ${msg.status}${target}`);
-                    }
-                    if (msg?.type === "relay_fatal") {
-                      applyRelayFatalStatus(msg?.reason);
-                      return;
-                    }
-                    if (msg?.type === "error") {
-                      const errorCode = String(msg?.error || "unknown");
-                      if (errorCode === "not_active_host") {
-                        setRelayStatus("Relay error: not_active_host");
-                        setStatusMsg({
-                          type: "error",
-                          text: "Another tab/session owns this room.",
-                          persistent: true,
-                        });
-                        liveIntentRef.current = false;
-                        return;
-                      }
-                      setRelayStatus(`Relay error: ${errorCode}`);
-                    }
-                } catch {}
-            };
-        } catch {}
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(String(ev.data || "{}"));
+            if (msg?.type === "pong" && msg?.echo) {
+              const rtt = Date.now() - Number(msg.echo);
+              setStreamHealth((prev) => ({ ...prev, rttMs: rtt }));
+              return;
+            }
+            if (msg?.type === "started") setRelayStatus("Relay streaming");
+            if (msg?.type === "ffmpeg_restarting") {
+              setRelayStatus(`Relay restarting (attempt ${msg?.attempt || "?"})`);
+            }
+            if (msg?.type === "ffmpeg_error") {
+              setRelayStatus(`Relay ffmpeg warning: ${msg?.message || "unknown"}`);
+            }
+            if (msg?.type === "relay_congestion") {
+              if (msg?.level === "hard") {
+                setRelayStatus("Relay congestion hard limit reached");
+                setStatusMsg({ type: "error", text: "Relay congestion exceeded hard limit. Stream stopping." });
+              } else if (msg?.level === "soft") {
+                setRelayStatus("Relay congestion detected");
+              } else if (msg?.level === "recovered") {
+                setRelayStatus("Relay congestion recovered");
+              }
+            }
+            if (msg?.type === "destination_status" && (msg?.status === "degraded" || msg?.status === "down")) {
+              const target = msg?.target ? ` (${msg.target})` : "";
+              setRelayStatus(`Destination ${msg.status}${target}`);
+            }
+            if (msg?.type === "relay_fatal") {
+              applyRelayFatalStatus(msg?.reason, undefined, msg);
+              return;
+            }
+            if (msg?.type === "error") {
+              const errorCode = String(msg?.error || "unknown");
+              if (errorCode === "not_active_host") {
+                setRelayStatus("Relay error: not_active_host");
+                setStatusMsg({
+                  type: "error",
+                  text: "Another tab/session owns this room.",
+                  persistent: true,
+                });
+                liveIntentRef.current = false;
+                return;
+              }
+              setRelayStatus(`Relay error: ${errorCode}`);
+            }
+          } catch { }
+        };
+      } catch { }
     };
 
     connectRelay();
 
     return () => {
-        if (keepAliveRef.current) clearInterval(keepAliveRef.current);
-        if (cloudDisconnectTimerRef.current) clearTimeout(cloudDisconnectTimerRef.current);
-        if (cloudSyncTimerRef.current) clearInterval(cloudSyncTimerRef.current);
-        if (relayRetryTimer) clearTimeout(relayRetryTimer);
-        phoneCallsRef.current.forEach((call) => {
-          try { call.close(); } catch {}
-        });
-        phoneCallsRef.current.clear();
-        mobileMetaRef.current.clear();
-        
-        try { ws?.close(); } catch {}
-        
-        const p: any = peerRef.current;
-        if (p && p.id === myPeerId) {
-            try { p.destroy(); } catch {}
-            peerRef.current = null;
-        }
+      if (keepAliveRef.current) clearInterval(keepAliveRef.current);
+      if (cloudDisconnectTimerRef.current) clearTimeout(cloudDisconnectTimerRef.current);
+      if (cloudSyncTimerRef.current) clearInterval(cloudSyncTimerRef.current);
+      if (relayRetryTimer) clearTimeout(relayRetryTimer);
+      phoneCallsRef.current.forEach((call) => {
+        try { call.close(); } catch { }
+      });
+      phoneCallsRef.current.clear();
+      mobileMetaRef.current.clear();
+
+      try { ws?.close(); } catch { }
+
+      const p: any = peerRef.current;
+      if (p && p.id === myPeerId) {
+        try { p.destroy(); } catch { }
+        peerRef.current = null;
+      }
     };
   }, [roomId]); // Re-run if room ID changes
 
   // --- HELPER FUNCTIONS ---
 
   const handleMobileStream = (stream: MediaStream, sourceId: string, label: string, peerId?: string) => {
-      const existingSource = cameraSourcesRef.current.find(s => s.id === sourceId);
-      let layerId = existingSource?.layerId;
-      const pendingTimer = phonePendingTimersRef.current.get(sourceId);
-      if (pendingTimer) {
-        window.clearTimeout(pendingTimer);
-        phonePendingTimersRef.current.delete(sourceId);
+    const existingSource = cameraSourcesRef.current.find(s => s.id === sourceId);
+    let layerId = existingSource?.layerId;
+    const pendingTimer = phonePendingTimersRef.current.get(sourceId);
+    if (pendingTimer) {
+      window.clearTimeout(pendingTimer);
+      phonePendingTimersRef.current.delete(sourceId);
+    }
+    if (existingSource?.stream && existingSource.stream !== stream) {
+      try { existingSource.stream.getTracks().forEach((t) => t.stop()); } catch { }
+    }
+
+    setLayers(prev => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      if (layerId) {
+        return safePrev.map(l => l.id === layerId ? { ...l, src: stream, label } : l);
       }
-      if (existingSource?.stream && existingSource.stream !== stream) {
-        try { existingSource.stream.getTracks().forEach((t) => t.stop()); } catch {}
+      const newLayer: Layer = {
+        id: generateId(),
+        type: SourceType.CAMERA,
+        label: label || 'Phone Cam',
+        visible: true,
+        x: 50, y: 50, width: 480, height: 270,
+        src: stream,
+        zIndex: safePrev.length + 10,
+        style: { circular: false, border: true, borderColor: '#7c3aed' }
+      };
+      layerId = newLayer.id;
+      return [...safePrev, newLayer];
+    });
+
+    if (layerId) {
+      mobileCamLayerIdRef.current = layerId;
+    }
+
+    setCameraSources(prev => {
+      const idx = prev.findIndex(s => s.id === sourceId);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], label, status: 'live', stream, layerId, peerId };
+        cameraSourcesRef.current = next;
+        return next;
       }
+      const next = [...prev, { id: sourceId, kind: 'phone', label, status: 'live', stream, layerId, peerId }];
+      cameraSourcesRef.current = next;
+      return next;
+    });
 
-      setLayers(prev => {
-          const safePrev = Array.isArray(prev) ? prev : [];
-          if (layerId) {
-              return safePrev.map(l => l.id === layerId ? { ...l, src: stream, label } : l);
-          }
-          const newLayer: Layer = {
-            id: generateId(),
-            type: SourceType.CAMERA,
-            label: label || 'Phone Cam',
-            visible: true,
-            x: 50, y: 50, width: 480, height: 270,
-            src: stream,
-            zIndex: safePrev.length + 10,
-            style: { circular: false, border: true, borderColor: '#7c3aed' }
-          };
-          layerId = newLayer.id;
-          return [...safePrev, newLayer];
-       });
+    const micId = `mobile-mic-${sourceId}`;
+    setAudioTracks(prev => {
+      if (prev.some(t => t.id === micId)) {
+        return prev.map(t => t.id === micId ? { ...t, stream: stream, label: `${label} Mic` } : t);
+      }
+      return [...prev, {
+        id: micId,
+        label: `${label} Mic`,
+        volume: 100,
+        muted: false,
+        isMic: true,
+        noiseCancellation: false,
+        stream: stream
+      }];
+    });
 
-       if (layerId) {
-         mobileCamLayerIdRef.current = layerId;
-       }
+    setStatusMsg({ type: 'info', text: `${label} Connected & Live!` });
+    setShowQRModal(false);
 
-       setCameraSources(prev => {
-         const idx = prev.findIndex(s => s.id === sourceId);
-         if (idx >= 0) {
-           const next = [...prev];
-           next[idx] = { ...next[idx], label, status: 'live', stream, layerId, peerId };
-           cameraSourcesRef.current = next;
-           return next;
-         }
-         const next = [...prev, { id: sourceId, kind: 'phone', label, status: 'live', stream, layerId, peerId }];
-         cameraSourcesRef.current = next;
-         return next;
-       });
-
-       const micId = `mobile-mic-${sourceId}`;
-       setAudioTracks(prev => {
-           if (prev.some(t => t.id === micId)) {
-               return prev.map(t => t.id === micId ? { ...t, stream: stream, label: `${label} Mic` } : t);
-           }
-           return [...prev, { 
-               id: micId, 
-               label: `${label} Mic`, 
-               volume: 100, 
-               muted: false, 
-               isMic: true, 
-               noiseCancellation: false, 
-               stream: stream 
-            }];
-       });
-
-       setStatusMsg({ type: 'info', text: `${label} Connected & Live!` });
-       setShowQRModal(false);
-
-       setCameraSources(prev => prev.map(s => s.id === sourceId ? { ...s, audioTrackId: micId } : s));
+    setCameraSources(prev => prev.map(s => s.id === sourceId ? { ...s, audioTrackId: micId } : s));
   };
 
   const regenerateRoomId = () => {
-      const newId = generateRoomId();
-      setRoomId(newId);
-      localStorage.setItem('aether_host_room_id', newId);
-      setStatusMsg({ type: 'info', text: "New Room ID Generated." });
+    const newId = generateRoomId();
+    setRoomId(newId);
+    localStorage.setItem('aether_host_room_id', newId);
+    setStatusMsg({ type: 'info', text: "New Room ID Generated." });
   };
 
   const addCameraSource = async (videoDeviceId: string, audioDeviceId: string, videoLabel: string) => {
@@ -1195,7 +1203,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         }
       }
       if (!stream) throw lastErr;
-      
+
       const layerId = generateId();
       const newLayer: Layer = {
         id: layerId, type: SourceType.CAMERA, label: videoLabel || 'Camera', visible: true, x: 0, y: 0, width: 1920, height: 1080, src: stream, zIndex: layers.length + 1, style: {}
@@ -1237,13 +1245,13 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       const newLayer: Layer = {
         id: generateId(), type: SourceType.SCREEN, label: 'Screen', visible: true, x: 0, y: 0, width: 1920, height: 1080, src: stream, zIndex: 0, style: {}
       };
-      setLayers(prev => [newLayer, ...prev]); 
+      setLayers(prev => [newLayer, ...prev]);
       if (stream.getAudioTracks().length > 0) {
         setAudioTracks(prev => [...prev, { id: generateId(), label: 'System Audio', volume: 80, muted: false, isMic: false, noiseCancellation: false, stream }]);
       }
       setSelectedLayerId(newLayer.id);
     } catch (err: any) {
-        if (err.name !== 'NotAllowedError') setStatusMsg({ type: 'error', text: err.message });
+      if (err.name !== 'NotAllowedError') setStatusMsg({ type: 'error', text: err.message });
     }
   };
 
@@ -1263,22 +1271,22 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   };
 
   const addTextLayer = () => {
-     const newLayer: Layer = { id: generateId(), type: SourceType.TEXT, label: 'Text', visible: true, x: 200, y: 200, width: 400, height: 100, content: 'Double Click to Edit', zIndex: layers.length + 1, style: {} };
-     setLayers(prev => [...prev, newLayer]);
-     setSelectedLayerId(newLayer.id);
+    const newLayer: Layer = { id: generateId(), type: SourceType.TEXT, label: 'Text', visible: true, x: 200, y: 200, width: 400, height: 100, content: 'Double Click to Edit', zIndex: layers.length + 1, style: {} };
+    setLayers(prev => [...prev, newLayer]);
+    setSelectedLayerId(newLayer.id);
   };
 
   const updateLayer = (id: string, updates: Partial<Layer>) => setLayers(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
-  
+
   const deleteLayer = (id: string) => {
     setLayers(prev => prev.filter(l => l.id !== id));
     if (selectedLayerId === id) setSelectedLayerId(null);
   };
-  
+
   const updateAudioTrack = (id: string, updates: Partial<AudioTrackConfig>) => setAudioTracks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
 
   const handleCanvasReady = (canvas: HTMLCanvasElement) => {
-      activeCanvasRef.current = canvas;
+    activeCanvasRef.current = canvas;
   };
 
   const getMixedStream = (fps: number = 30, includeAudio: boolean = true) => {
@@ -1290,15 +1298,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
   const openVirtualCable = () => {
     if (audioContext.current?.state === 'suspended') {
-        audioContext.current.resume();
+      audioContext.current.resume();
     }
-    
+
     if (!activeCanvasRef.current) return;
-    
+
     const win = window.open('', 'AetherVirtualCable', 'width=1280,height=720,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
     if (!win) {
-        setStatusMsg({ type: 'error', text: "Popup blocked! Allow popups for Virtual Cable." });
-        return;
+      setStatusMsg({ type: 'error', text: "Popup blocked! Allow popups for Virtual Cable." });
+      return;
     }
 
     win.document.title = "Aether Virtual Output";
@@ -1316,7 +1324,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     outCanvas.style.height = '100vh';
     outCanvas.style.objectFit = 'contain';
     win.document.body.appendChild(outCanvas);
-    
+
     const msg = win.document.createElement('div');
     msg.innerText = "Virtual Cable Active: Capture this window in Zoom/OBS";
     msg.style.position = 'absolute';
@@ -1330,10 +1338,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
     const ctx = outCanvas.getContext('2d');
     const syncLoop = () => {
-        if (!win.closed && ctx && activeCanvasRef.current) {
-            ctx.drawImage(activeCanvasRef.current, 0, 0, outCanvas.width, outCanvas.height);
-            win.requestAnimationFrame(syncLoop);
-        }
+      if (!win.closed && ctx && activeCanvasRef.current) {
+        ctx.drawImage(activeCanvasRef.current, 0, 0, outCanvas.width, outCanvas.height);
+        win.requestAnimationFrame(syncLoop);
+      }
     };
     syncLoop();
     setStatusMsg({ type: 'info', text: "Virtual Output Window Opened" });
@@ -1350,17 +1358,17 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
       const stream = getMixedStream();
       if (!stream) {
-          setStatusMsg({ type: 'error', text: "No stream available (Canvas not ready)" });
-          return;
+        setStatusMsg({ type: 'error', text: "No stream available (Canvas not ready)" });
+        return;
       }
-      
+
       const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
       localChunksRef.current = [];
-      
+
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) localChunksRef.current.push(e.data);
       };
-      
+
       recorder.onstop = () => {
         const blob = new Blob(localChunksRef.current, { type: 'video/webm' });
         const url = URL.createObjectURL(blob);
@@ -1370,7 +1378,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         a.click();
         setStatusMsg({ type: 'info', text: "Recording Saved!" });
       };
-      
+
       recorder.start();
       localRecorderRef.current = recorder;
       setIsRecording(true);
@@ -1422,14 +1430,22 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     });
   }
 
-  function applyRelayFatalStatus(reasonRaw: unknown, fallbackText?: string) {
+  function applyRelayFatalStatus(reasonRaw: unknown, fallbackText?: string, meta?: Record<string, unknown>) {
     const reason = String(reasonRaw || '').trim() || 'unknown_relay_fatal';
     const reasonMap: Record<string, string> = {
       no_input_data_from_encoder: "Browser encoder produced no media data.",
       no_input_data: "Browser encoder produced no media data.",
       not_active_host: "Another tab/session owns this room.",
+      max_restart_exceeded: "Stream stopped after repeated failures. Check your stream key and network.",
+      relay_hard_congestion: "Upload bandwidth too low for current stream quality. Try a lower quality preset.",
+      all_destinations_failed: "All stream destinations failed. Verify your stream keys are correct.",
     };
-    const text = reasonMap[reason] || fallbackText || `Relay fatal: ${reason}`;
+    let text = reasonMap[reason] || fallbackText || `Relay fatal: ${reason}`;
+    // Append diagnostic metadata if available
+    const attempts = meta?.attempts ?? (meta as any)?.attempts;
+    const lastError = meta?.lastError ?? (meta as any)?.lastError;
+    if (attempts != null) text += ` (${attempts} attempts)`;
+    if (lastError) text += ` — ${String(lastError).slice(0, 120)}`;
     setRelayStatus(`Relay fatal: ${reason}`);
     setStatusMsg({ type: "error", text, persistent: true });
     liveIntentRef.current = false;
@@ -1441,7 +1457,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     pendingStartRef.current = null;
     encoderStartAtRef.current = null;
     resetEncoderBootstrap('inactive');
-    try { mediaRecorderRef.current?.stop(); } catch {}
+    try { mediaRecorderRef.current?.stop(); } catch { }
     setStreamStatus(StreamStatus.IDLE);
   }
 
@@ -1515,11 +1531,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         setStreamStatus(StreamStatus.LIVE);
         return;
       }
-      try { mediaRecorderRef.current.stop(); } catch {}
+      try { mediaRecorderRef.current.stop(); } catch { }
     }
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try { mediaRecorderRef.current.stop(); } catch {}
+      try { mediaRecorderRef.current.stop(); } catch { }
     }
 
     const chosenQuality = opts?.qualityOverride || streamQuality;
@@ -1639,7 +1655,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       encoderRetryInFlightRef.current = false;
       pendingStartRef.current = null;
       encoderStartAtRef.current = null;
-      try { recorder.stop(); } catch {}
+      try { recorder.stop(); } catch { }
       sendStopStreamCommand();
       setStreamStatus(StreamStatus.IDLE);
     };
@@ -1676,7 +1692,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
       requestDataTimer = window.setInterval(() => {
         if (recorder.state === 'recording') {
-          try { recorder.requestData(); } catch {}
+          try { recorder.requestData(); } catch { }
         }
       }, 1000);
 
@@ -1763,7 +1779,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         liveIntentRef.current = false;
         setRelayStatus("Browser upload queue exceeded hard limit.");
         setStatusMsg({ type: 'error', text: "Upload congestion too high. Stream stopped to recover." });
-        try { recorder.stop(); } catch {}
+        try { recorder.stop(); } catch { }
         sendStopStreamCommand();
         setStreamStatus(StreamStatus.IDLE);
         return;
@@ -1793,7 +1809,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
           ...prev,
           chunksSent: prev.chunksSent + 1,
         }));
-      } catch {}
+      } catch { }
     };
 
     try {
@@ -1866,10 +1882,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   };
 
   const handleSignOut = () => {
-     if (auth) {
-       signOut(auth).catch(console.error);
-     }
-     onBack();
+    if (auth) {
+      signOut(auth).catch(console.error);
+    }
+    onBack();
   };
 
   const checkForDesktopUpdates = async () => {
@@ -2011,7 +2027,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     try {
       const u = new URL(url);
       url = `${u.protocol}//${u.host}`;
-    } catch {}
+    } catch { }
     const params = new URLSearchParams();
     params.set('mode', 'companion');
     params.set('room', roomId);
@@ -2024,7 +2040,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         try {
           const u = new URL(url);
           host = u.hostname;
-        } catch {}
+        } catch { }
       }
       if (host) {
         params.set('peerMode', 'custom');
@@ -2114,7 +2130,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const removeSource = (id: string) => {
     const src = cameraSourcesRef.current.find(s => s.id === id);
     if (src?.stream) {
-      try { src.stream.getTracks().forEach(t => t.stop()); } catch {}
+      try { src.stream.getTracks().forEach(t => t.stop()); } catch { }
     }
     if (src?.audioTrackId) {
       setAudioTracks(prev => prev.filter(t => t.id !== src.audioTrackId));
@@ -2136,7 +2152,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     }
     const activeCall = phoneCallsRef.current.get(id);
     if (activeCall) {
-      try { activeCall.close(); } catch {}
+      try { activeCall.close(); } catch { }
       phoneCallsRef.current.delete(id);
     }
     mobileMetaRef.current.forEach((meta, peer) => {
@@ -2565,9 +2581,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
   // --- RENDER ---
   return (
-    <div className="fixed inset-0 flex flex-col w-full bg-aether-900/95 text-gray-200 font-sans selection:bg-aether-500 selection:text-white relative overflow-x-hidden overflow-y-auto">
+    <div className="fixed inset-0 flex flex-col w-full bg-aether-900/95 text-gray-200 font-sans selection:bg-aether-500 selection:text-white relative overflow-hidden">
       <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
-      
+
       {statusMsg && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 px-6 py-3 rounded-xl text-sm font-bold flex flex-col items-center gap-1 shadow-lg bg-aether-800 border border-aether-700 z-50 min-w-[320px]">
           <div className="w-full flex items-center gap-3">
@@ -2651,44 +2667,43 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
           </h1>
         </div>
         <div className="flex items-center gap-4 bg-aether-800 p-1.5 rounded-full border border-aether-700">
-           <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase ${streamStatus === StreamStatus.LIVE ? 'bg-red-600 text-white animate-pulse' : 'text-gray-500'}`}>
-              <Circle size={8} fill={streamStatus !== StreamStatus.IDLE ? "currentColor" : "none"} />
-              {streamStatus === StreamStatus.LIVE ? 'ON AIR' : 'Ready'}
-           </div>
-           
-           <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase border ${cloudConnected ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
-                <Cloud size={10} /> {cloudConnected ? 'Online' : 'Offline'}
-           </div>
+          <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase ${streamStatus === StreamStatus.LIVE ? 'bg-red-600 text-white animate-pulse' : 'text-gray-500'}`}>
+            <Circle size={8} fill={streamStatus !== StreamStatus.IDLE ? "currentColor" : "none"} />
+            {streamStatus === StreamStatus.LIVE ? 'ON AIR' : 'Ready'}
+          </div>
 
-           <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase border ${relayConnected ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`} title={relayStatus || undefined}>
-             <Network size={10} /> {relayConnected ? 'Relay' : 'Relay Offline'}
-           </div>
+          <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase border ${cloudConnected ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
+            <Cloud size={10} /> {cloudConnected ? 'Online' : 'Offline'}
+          </div>
+
+          <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase border ${relayConnected ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`} title={relayStatus || undefined}>
+            <Network size={10} /> {relayConnected ? 'Relay' : 'Relay Offline'}
+          </div>
         </div>
         <div className="flex gap-3">
-          <button 
-             onClick={openVirtualCable}
-             className="flex items-center gap-2 px-3 py-2 text-aether-400 hover:text-white hover:bg-aether-800 rounded-lg transition-colors text-sm font-medium border border-transparent hover:border-aether-700"
-             title="Open Virtual Cable Output Window"
+          <button
+            onClick={openVirtualCable}
+            className="flex items-center gap-2 px-3 py-2 text-aether-400 hover:text-white hover:bg-aether-800 rounded-lg transition-colors text-sm font-medium border border-transparent hover:border-aether-700"
+            title="Open Virtual Cable Output Window"
           >
-              <Tv size={18} /> Popout Output
+            <Tv size={18} /> Popout Output
           </button>
 
           <button onClick={() => setShowHelpModal(true)} className="p-2 text-gray-400 hover:text-white hover:bg-aether-800 rounded-lg"><HelpCircle size={20} /></button>
           <button
             onClick={checkForDesktopUpdates}
             disabled={isCheckingUpdates}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-              isCheckingUpdates
-                ? 'bg-aether-900 border-aether-800 text-gray-500 cursor-not-allowed'
-                : 'bg-aether-800 border-aether-700 text-gray-200 hover:bg-aether-700 hover:text-white'
-            }`}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${isCheckingUpdates
+              ? 'bg-aether-900 border-aether-800 text-gray-500 cursor-not-allowed'
+              : 'bg-aether-800 border-aether-700 text-gray-200 hover:bg-aether-700 hover:text-white'
+              }`}
             title="Check for app updates"
           >
             <Download size={16} /> {isCheckingUpdates ? 'Checking...' : 'Check Updates'}
           </button>
-          
-          <button 
-            onClick={toggleRecording} 
+
+          <button
+            onClick={toggleRecording}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${isRecording ? 'bg-white text-red-600' : 'bg-aether-800 border border-aether-700 hover:bg-aether-700'}`}
           >
             {isRecording ? <Square size={18} fill="currentColor" /> : <Disc size={18} />}
@@ -2698,13 +2713,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
           <button
             onClick={toggleLive}
             disabled={!canToggleLive}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
-              streamStatus === StreamStatus.LIVE
-                ? 'bg-red-600 text-white'
-                : canToggleLive
-                  ? 'bg-aether-800 border border-aether-700 hover:bg-aether-700'
-                  : 'bg-aether-900 border border-aether-800 text-gray-500 cursor-not-allowed opacity-70'
-            }`}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${streamStatus === StreamStatus.LIVE
+              ? 'bg-red-600 text-white'
+              : canToggleLive
+                ? 'bg-aether-800 border border-aether-700 hover:bg-aether-700'
+                : 'bg-aether-900 border border-aether-800 text-gray-500 cursor-not-allowed opacity-70'
+              }`}
             title={!canToggleLive ? "Relay and stream key required" : undefined}
           >
             <Radio size={18} /> {streamStatus === StreamStatus.LIVE ? 'End Stream' : 'Go Live'}
@@ -2716,23 +2730,23 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
       <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:flex-row">
         <aside className="w-16 hidden md:flex flex-col items-center py-6 gap-6 border-r border-aether-700 bg-aether-800/50">
-           <SourceButton icon={<Camera size={24} />} label="Camera" onClick={() => setShowDeviceSelector(true)} />
-           <SourceButton icon={<Smartphone size={24} />} label={phoneSlotsFull ? `Mobile (${MAX_PHONE_CAMS} max)` : "Mobile"} onClick={createPhoneSource} disabled={phoneSlotsFull} />
-           <SourceButton icon={<Monitor size={24} />} label="Screen" onClick={addScreenSource} />
-           <SourceButton icon={<ImageIcon size={24} />} label="Image" onClick={() => fileInputRef.current?.click()} />
-           <SourceButton icon={<Type size={24} />} label="Text" onClick={addTextLayer} />
-           <SourceButton icon={<HelpCircle size={24} />} label="Help" onClick={() => setShowHelpModal(true)} />
+          <SourceButton icon={<Camera size={24} />} label="Camera" onClick={() => setShowDeviceSelector(true)} />
+          <SourceButton icon={<Smartphone size={24} />} label={phoneSlotsFull ? `Mobile (${MAX_PHONE_CAMS} max)` : "Mobile"} onClick={createPhoneSource} disabled={phoneSlotsFull} />
+          <SourceButton icon={<Monitor size={24} />} label="Screen" onClick={addScreenSource} />
+          <SourceButton icon={<ImageIcon size={24} />} label="Image" onClick={() => fileInputRef.current?.click()} />
+          <SourceButton icon={<Type size={24} />} label="Text" onClick={addTextLayer} />
+          <SourceButton icon={<HelpCircle size={24} />} label="Help" onClick={() => setShowHelpModal(true)} />
         </aside>
         <main className="flex-1 min-h-0 flex flex-col relative bg-aether-900/80 overflow-hidden">
           <div className="flex-1 p-4 md:p-8 flex items-center justify-center">
-            <CanvasStage 
-                layers={layers} 
-                onCanvasReady={handleCanvasReady} 
-                selectedLayerId={selectedLayerId} 
-                onSelectLayer={setSelectedLayerId} 
-                onUpdateLayer={updateLayer} 
-                isPro={isPro}
-                transitionOverlay={{ alpha: transitionAlpha, color: '#000000' }}
+            <CanvasStage
+              layers={layers}
+              onCanvasReady={handleCanvasReady}
+              selectedLayerId={selectedLayerId}
+              onSelectLayer={setSelectedLayerId}
+              onUpdateLayer={updateLayer}
+              isPro={isPro}
+              transitionOverlay={{ alpha: transitionAlpha, color: '#000000' }}
             />
           </div>
           <AudioMixer
@@ -2742,264 +2756,264 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
           />
         </main>
         <div className="w-full md:w-80 md:border-l border-aether-700 bg-aether-900 flex flex-col min-h-0">
-            <div className="flex border-b border-aether-700">
-                <button onClick={() => setRightPanelTab('properties')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'properties' ? 'bg-aether-800 text-white' : 'text-gray-500'}`}><Sliders size={14} /> Properties</button>
-                <button onClick={() => setRightPanelTab('inputs')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'inputs' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Camera size={14} /> Inputs</button>
-                <button onClick={() => setRightPanelTab('ai')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'ai' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Sparkles size={14} /> AI Studio</button>
-            </div>
-            <div className="flex-1 overflow-hidden">
-                {rightPanelTab === 'properties' && (
-                  <LayerProperties layer={layers.find(l => l.id === selectedLayerId) || null} onUpdate={updateLayer} onDelete={deleteLayer} isPro={isPro} />
-                )}
-                {rightPanelTab === 'ai' && (
-                  <AIPanel onAddLayer={(src) => addImageLayer(src, 'AI Background')} />
-                )}
-                {rightPanelTab === 'inputs' && (
-                  <div className="h-full overflow-y-auto p-4 pb-24 space-y-3">
-                    <CollapsibleSection
-                      title="Input Manager"
-                      subtitle="Local cameras and phones"
-                      open={inputsSection === 'input-manager'}
-                      onToggle={(open) => setInputsSection(open ? 'input-manager' : '')}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="text-[10px] text-gray-500">Add sources and manage live cuts</div>
-                        <div className="flex gap-2">
-                          <button onClick={() => setShowDeviceSelector(true)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Add Local</button>
-                          <button onClick={createPhoneSource} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Add Phone</button>
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button onClick={cutToNext} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Cut To Next</button>
-                        <button onClick={emergencyWide} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Emergency Wide</button>
-                      </div>
-                    </CollapsibleSection>
-
-                    <CollapsibleSection
-                      title="Composer Mode"
-                      subtitle="Main + thumbnails layout"
-                      open={inputsSection === 'composer'}
-                      onToggle={(open) => setInputsSection(open ? 'composer' : '')}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="text-[10px] text-gray-500">Apply a staged layout to the program view</div>
-                        <div className="flex items-center gap-2">
-                          <button onClick={applyComposerLayout} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Apply</button>
-                          <label className="text-[10px] text-gray-300 flex items-center gap-1">
-                            <input type="checkbox" checked={composerMode} onChange={(e) => setComposerMode(e.target.checked)} />
-                            On
-                          </label>
-                        </div>
-                      </div>
-                    </CollapsibleSection>
-
-                    <CollapsibleSection
-                      title="Auto-Director"
-                      subtitle="Auto switches cameras on a timer"
-                      open={inputsSection === 'auto-director'}
-                      onToggle={(open) => setInputsSection(open ? 'auto-director' : '')}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="text-[10px] text-gray-500">Rotate through inputs automatically</div>
-                        <label className="text-[10px] text-gray-300 flex items-center gap-1">
-                          <input type="checkbox" checked={autoDirectorOn} onChange={(e) => setAutoDirectorOn(e.target.checked)} />
-                          On
-                        </label>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-gray-400">Interval (sec)</span>
-                        <input
-                          type="number"
-                          value={autoDirectorInterval}
-                          onChange={(e) => setAutoDirectorInterval(Number(e.target.value) || 12)}
-                          className="w-16 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                        />
-                      </div>
-                    </CollapsibleSection>
-
-                    <CollapsibleSection
-                      title="Lower Thirds"
-                      subtitle="Name + title overlays"
-                      open={inputsSection === 'lower-thirds'}
-                      onToggle={(open) => setInputsSection(open ? 'lower-thirds' : '')}
-                    >
-                      <input
-                        value={lowerThirdName}
-                        onChange={(e) => setLowerThirdName(e.target.value)}
-                        className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                        placeholder="Name"
-                      />
-                      <input
-                        value={lowerThirdTitle}
-                        onChange={(e) => setLowerThirdTitle(e.target.value)}
-                        className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                        placeholder="Title"
-                      />
-                      <div className="flex gap-2">
-                        <button onClick={() => setLowerThirdVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Show</button>
-                        <button onClick={() => setLowerThirdVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Hide</button>
-                        <button onClick={() => showLowerThirdTemporarily(5000)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Show 5s</button>
-                      </div>
-                    </CollapsibleSection>
-
-                    <CollapsibleSection
-                      title="Transitions"
-                      subtitle="Cut or fade between scenes"
-                      open={inputsSection === 'transitions'}
-                      onToggle={(open) => setInputsSection(open ? 'transitions' : '')}
-                    >
-                      <div className="flex items-center gap-2">
-                        <select
-                          value={transitionMode}
-                          onChange={(e) => setTransitionMode(e.target.value as any)}
-                          className="bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                        >
-                          <option value="cut">Cut</option>
-                          <option value="fade">Fade</option>
-                        </select>
-                        <input
-                          type="number"
-                          value={transitionMs}
-                          onChange={(e) => setTransitionMs(Number(e.target.value) || 300)}
-                          className="w-16 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                        />
-                        <span className="text-[10px] text-gray-400">ms</span>
-                      </div>
-                    </CollapsibleSection>
-
-                    <CollapsibleSection
-                      title="Scene Presets"
-                      subtitle="Save and recall layouts"
-                      open={inputsSection === 'scene-presets'}
-                      onToggle={(open) => setInputsSection(open ? 'scene-presets' : '')}
-                    >
-                      <div className="space-y-2">
-                        <input
-                          value={presetName}
-                          onChange={(e) => setPresetName(e.target.value)}
-                          className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                          placeholder="Preset name"
-                        />
-                        <div className="grid grid-cols-[1fr_auto] gap-2">
-                          <select
-                            value={layoutTemplate}
-                            onChange={(e) => setLayoutTemplate(e.target.value as any)}
-                            className="bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                          >
-                            <option value="main_thumbs">Main + Thumbs</option>
-                            <option value="grid_2x2">2x2 Grid</option>
-                            <option value="freeform">Freeform</option>
-                          </select>
-                          <button onClick={saveScenePreset} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Save</button>
-                        </div>
-                      </div>
-                      {scenePresets.length === 0 && (
-                        <div className="text-[10px] text-gray-500">No presets yet.</div>
-                      )}
-                      {scenePresets.map(p => (
-                        <div key={p.id} className="flex items-center gap-2">
-                          <div className="flex-1 text-[10px] text-gray-300">{p.name} <span className="text-gray-500">({p.layout})</span></div>
-                          <button onClick={() => loadScenePresetById(p.id)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Load</button>
-                          <button onClick={() => deleteScenePreset(p.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Delete</button>
-                        </div>
-                      ))}
-                    </CollapsibleSection>
-
-                    <CollapsibleSection
-                      title="Audience Studio"
-                      subtitle="Pinned + ticker messages"
-                      open={inputsSection === 'audience'}
-                      onToggle={(open) => setInputsSection(open ? 'audience' : '')}
-                    >
-                      <input
-                        value={pinnedMessage}
-                        onChange={(e) => setPinnedMessage(e.target.value)}
-                        className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                        placeholder="Pinned message"
-                      />
-                      <div className="flex gap-2">
-                        <button onClick={() => setPinnedVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Show Pin</button>
-                        <button onClick={() => setPinnedVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Hide Pin</button>
-                      </div>
-                      <input
-                        value={tickerMessage}
-                        onChange={(e) => setTickerMessage(e.target.value)}
-                        className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                        placeholder="Ticker message"
-                      />
-                      <div className="flex gap-2">
-                        <button onClick={() => setTickerVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Start Ticker</button>
-                        <button onClick={() => setTickerVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Stop Ticker</button>
-                      </div>
-                    </CollapsibleSection>
-
-                    {cameraSources.length === 0 && (
-                      <div className="text-xs text-gray-500 border border-aether-700 rounded p-3 bg-aether-800/40">
-                        No camera inputs yet. Add a local or phone camera.
-                      </div>
-                    )}
-
-                    {cameraSources.map(src => (
-                      <div key={src.id} className="flex items-center gap-3 bg-aether-800/50 border border-aether-700 rounded-lg p-2">
-                        <SourcePreview stream={src.stream} />
-                        <div className="flex-1">
-                          <input
-                            value={src.label}
-                            onChange={(e) => updateSourceLabel(src.id, e.target.value)}
-                            className="w-full bg-transparent text-sm text-white outline-none border-b border-transparent focus:border-aether-500"
-                          />
-                          <div className="text-[10px] text-gray-500">{src.kind === 'local' ? 'Local Camera' : 'Phone Camera'} • {src.status}</div>
-                        </div>
-                        <div className="flex flex-col gap-1">
-                          <button onClick={() => makeMain(src.layerId)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Make Main</button>
-                          {src.audioTrackId && (
-                            <button onClick={() => setSourceAudioActive(src.id)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Use Audio</button>
-                          )}
-                          <button onClick={() => removeSource(src.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Remove</button>
-                        </div>
-                      </div>
-                    ))}
-
-                    <div className="pt-2">
-                      <h4 className="text-xs font-bold text-gray-300 mb-2">Phone Slots ({phoneSourceCount}/{MAX_PHONE_CAMS})</h4>
-                      {phoneSourceCount === 0 && (
-                        <div className="text-[10px] text-gray-500 border border-aether-700 rounded p-2 bg-aether-800/30">
-                          No phone slots created yet.
-                        </div>
-                      )}
-                      {phoneSlotsFull && (
-                        <div className="text-[10px] text-amber-300 border border-amber-500/40 rounded p-2 bg-amber-500/10 mb-2">
-                          Phone slot limit reached. Remove one slot to add another.
-                        </div>
-                      )}
-                      {cameraSources.filter(s => s.kind === 'phone').map(src => (
-                        <div key={`phone-${src.id}`} className="flex items-center gap-2 border border-aether-700 rounded p-2 bg-aether-800/30 mb-2">
-                          <div className="flex-1">
-                            <div className="text-xs text-white">{src.label}</div>
-                            <div className="text-[10px] text-gray-500">Status: {src.status}</div>
-                          </div>
-                          {src.status !== 'live' && (
-                            <button onClick={() => openPhoneQr(src.id)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Show QR</button>
-                          )}
-                          <button
-                            onClick={() => {
-                              const link = buildMobileUrl(src.id, src.label);
-                              if (link) {
-                                navigator.clipboard?.writeText(link).catch(() => {});
-                              }
-                            }}
-                            className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200"
-                          >
-                            Copy Link
-                          </button>
-                          <button onClick={() => makeMain(src.layerId)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Make Main</button>
-                          <button onClick={() => removeSource(src.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Remove</button>
-                        </div>
-                      ))}
+          <div className="flex border-b border-aether-700">
+            <button onClick={() => setRightPanelTab('properties')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'properties' ? 'bg-aether-800 text-white' : 'text-gray-500'}`}><Sliders size={14} /> Properties</button>
+            <button onClick={() => setRightPanelTab('inputs')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'inputs' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Camera size={14} /> Inputs</button>
+            <button onClick={() => setRightPanelTab('ai')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'ai' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Sparkles size={14} /> AI Studio</button>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            {rightPanelTab === 'properties' && (
+              <LayerProperties layer={layers.find(l => l.id === selectedLayerId) || null} onUpdate={updateLayer} onDelete={deleteLayer} isPro={isPro} />
+            )}
+            {rightPanelTab === 'ai' && (
+              <AIPanel onAddLayer={(src) => addImageLayer(src, 'AI Background')} />
+            )}
+            {rightPanelTab === 'inputs' && (
+              <div className="h-full overflow-y-auto p-4 pb-24 space-y-3">
+                <CollapsibleSection
+                  title="Input Manager"
+                  subtitle="Local cameras and phones"
+                  open={inputsSection === 'input-manager'}
+                  onToggle={(open) => setInputsSection(open ? 'input-manager' : '')}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="text-[10px] text-gray-500">Add sources and manage live cuts</div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setShowDeviceSelector(true)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Add Local</button>
+                      <button onClick={createPhoneSource} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Add Phone</button>
                     </div>
                   </div>
+                  <div className="flex gap-2">
+                    <button onClick={cutToNext} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Cut To Next</button>
+                    <button onClick={emergencyWide} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Emergency Wide</button>
+                  </div>
+                </CollapsibleSection>
+
+                <CollapsibleSection
+                  title="Composer Mode"
+                  subtitle="Main + thumbnails layout"
+                  open={inputsSection === 'composer'}
+                  onToggle={(open) => setInputsSection(open ? 'composer' : '')}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="text-[10px] text-gray-500">Apply a staged layout to the program view</div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={applyComposerLayout} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Apply</button>
+                      <label className="text-[10px] text-gray-300 flex items-center gap-1">
+                        <input type="checkbox" checked={composerMode} onChange={(e) => setComposerMode(e.target.checked)} />
+                        On
+                      </label>
+                    </div>
+                  </div>
+                </CollapsibleSection>
+
+                <CollapsibleSection
+                  title="Auto-Director"
+                  subtitle="Auto switches cameras on a timer"
+                  open={inputsSection === 'auto-director'}
+                  onToggle={(open) => setInputsSection(open ? 'auto-director' : '')}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="text-[10px] text-gray-500">Rotate through inputs automatically</div>
+                    <label className="text-[10px] text-gray-300 flex items-center gap-1">
+                      <input type="checkbox" checked={autoDirectorOn} onChange={(e) => setAutoDirectorOn(e.target.checked)} />
+                      On
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-gray-400">Interval (sec)</span>
+                    <input
+                      type="number"
+                      value={autoDirectorInterval}
+                      onChange={(e) => setAutoDirectorInterval(Number(e.target.value) || 12)}
+                      className="w-16 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                    />
+                  </div>
+                </CollapsibleSection>
+
+                <CollapsibleSection
+                  title="Lower Thirds"
+                  subtitle="Name + title overlays"
+                  open={inputsSection === 'lower-thirds'}
+                  onToggle={(open) => setInputsSection(open ? 'lower-thirds' : '')}
+                >
+                  <input
+                    value={lowerThirdName}
+                    onChange={(e) => setLowerThirdName(e.target.value)}
+                    className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                    placeholder="Name"
+                  />
+                  <input
+                    value={lowerThirdTitle}
+                    onChange={(e) => setLowerThirdTitle(e.target.value)}
+                    className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                    placeholder="Title"
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={() => setLowerThirdVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Show</button>
+                    <button onClick={() => setLowerThirdVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Hide</button>
+                    <button onClick={() => showLowerThirdTemporarily(5000)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Show 5s</button>
+                  </div>
+                </CollapsibleSection>
+
+                <CollapsibleSection
+                  title="Transitions"
+                  subtitle="Cut or fade between scenes"
+                  open={inputsSection === 'transitions'}
+                  onToggle={(open) => setInputsSection(open ? 'transitions' : '')}
+                >
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={transitionMode}
+                      onChange={(e) => setTransitionMode(e.target.value as any)}
+                      className="bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                    >
+                      <option value="cut">Cut</option>
+                      <option value="fade">Fade</option>
+                    </select>
+                    <input
+                      type="number"
+                      value={transitionMs}
+                      onChange={(e) => setTransitionMs(Number(e.target.value) || 300)}
+                      className="w-16 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                    />
+                    <span className="text-[10px] text-gray-400">ms</span>
+                  </div>
+                </CollapsibleSection>
+
+                <CollapsibleSection
+                  title="Scene Presets"
+                  subtitle="Save and recall layouts"
+                  open={inputsSection === 'scene-presets'}
+                  onToggle={(open) => setInputsSection(open ? 'scene-presets' : '')}
+                >
+                  <div className="space-y-2">
+                    <input
+                      value={presetName}
+                      onChange={(e) => setPresetName(e.target.value)}
+                      className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                      placeholder="Preset name"
+                    />
+                    <div className="grid grid-cols-[1fr_auto] gap-2">
+                      <select
+                        value={layoutTemplate}
+                        onChange={(e) => setLayoutTemplate(e.target.value as any)}
+                        className="bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                      >
+                        <option value="main_thumbs">Main + Thumbs</option>
+                        <option value="grid_2x2">2x2 Grid</option>
+                        <option value="freeform">Freeform</option>
+                      </select>
+                      <button onClick={saveScenePreset} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Save</button>
+                    </div>
+                  </div>
+                  {scenePresets.length === 0 && (
+                    <div className="text-[10px] text-gray-500">No presets yet.</div>
+                  )}
+                  {scenePresets.map(p => (
+                    <div key={p.id} className="flex items-center gap-2">
+                      <div className="flex-1 text-[10px] text-gray-300">{p.name} <span className="text-gray-500">({p.layout})</span></div>
+                      <button onClick={() => loadScenePresetById(p.id)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Load</button>
+                      <button onClick={() => deleteScenePreset(p.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Delete</button>
+                    </div>
+                  ))}
+                </CollapsibleSection>
+
+                <CollapsibleSection
+                  title="Audience Studio"
+                  subtitle="Pinned + ticker messages"
+                  open={inputsSection === 'audience'}
+                  onToggle={(open) => setInputsSection(open ? 'audience' : '')}
+                >
+                  <input
+                    value={pinnedMessage}
+                    onChange={(e) => setPinnedMessage(e.target.value)}
+                    className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                    placeholder="Pinned message"
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={() => setPinnedVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Show Pin</button>
+                    <button onClick={() => setPinnedVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Hide Pin</button>
+                  </div>
+                  <input
+                    value={tickerMessage}
+                    onChange={(e) => setTickerMessage(e.target.value)}
+                    className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
+                    placeholder="Ticker message"
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={() => setTickerVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Start Ticker</button>
+                    <button onClick={() => setTickerVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Stop Ticker</button>
+                  </div>
+                </CollapsibleSection>
+
+                {cameraSources.length === 0 && (
+                  <div className="text-xs text-gray-500 border border-aether-700 rounded p-3 bg-aether-800/40">
+                    No camera inputs yet. Add a local or phone camera.
+                  </div>
                 )}
-            </div>
+
+                {cameraSources.map(src => (
+                  <div key={src.id} className="flex items-center gap-3 bg-aether-800/50 border border-aether-700 rounded-lg p-2">
+                    <SourcePreview stream={src.stream} />
+                    <div className="flex-1">
+                      <input
+                        value={src.label}
+                        onChange={(e) => updateSourceLabel(src.id, e.target.value)}
+                        className="w-full bg-transparent text-sm text-white outline-none border-b border-transparent focus:border-aether-500"
+                      />
+                      <div className="text-[10px] text-gray-500">{src.kind === 'local' ? 'Local Camera' : 'Phone Camera'} • {src.status}</div>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <button onClick={() => makeMain(src.layerId)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Make Main</button>
+                      {src.audioTrackId && (
+                        <button onClick={() => setSourceAudioActive(src.id)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Use Audio</button>
+                      )}
+                      <button onClick={() => removeSource(src.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Remove</button>
+                    </div>
+                  </div>
+                ))}
+
+                <div className="pt-2">
+                  <h4 className="text-xs font-bold text-gray-300 mb-2">Phone Slots ({phoneSourceCount}/{MAX_PHONE_CAMS})</h4>
+                  {phoneSourceCount === 0 && (
+                    <div className="text-[10px] text-gray-500 border border-aether-700 rounded p-2 bg-aether-800/30">
+                      No phone slots created yet.
+                    </div>
+                  )}
+                  {phoneSlotsFull && (
+                    <div className="text-[10px] text-amber-300 border border-amber-500/40 rounded p-2 bg-amber-500/10 mb-2">
+                      Phone slot limit reached. Remove one slot to add another.
+                    </div>
+                  )}
+                  {cameraSources.filter(s => s.kind === 'phone').map(src => (
+                    <div key={`phone-${src.id}`} className="flex items-center gap-2 border border-aether-700 rounded p-2 bg-aether-800/30 mb-2">
+                      <div className="flex-1">
+                        <div className="text-xs text-white">{src.label}</div>
+                        <div className="text-[10px] text-gray-500">Status: {src.status}</div>
+                      </div>
+                      {src.status !== 'live' && (
+                        <button onClick={() => openPhoneQr(src.id)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Show QR</button>
+                      )}
+                      <button
+                        onClick={() => {
+                          const link = buildMobileUrl(src.id, src.label);
+                          if (link) {
+                            navigator.clipboard?.writeText(link).catch(() => { });
+                          }
+                        }}
+                        className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200"
+                      >
+                        Copy Link
+                      </button>
+                      <button onClick={() => makeMain(src.layerId)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Make Main</button>
+                      <button onClick={() => removeSource(src.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Remove</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -3068,7 +3082,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
               <SettingsSection title="Room Management" subtitle="Force new room if stuck">
                 <div className="flex justify-between items-center">
                   <div className="text-xs text-gray-400">Reset the room if devices get stuck</div>
-                  <button 
+                  <button
                     onClick={regenerateRoomId}
                     className="p-2 bg-red-500/10 text-red-400 hover:bg-red-500/20 rounded-lg text-xs flex items-center gap-1 border border-red-500/20"
                   >
@@ -3165,10 +3179,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
               <SettingsSection title="Pro License" subtitle="Unlock advanced features">
                 <label className="text-gray-400 text-sm">Pro License Key</label>
-                <input 
-                  type="text" 
-                  value={licenseKey} 
-                  onChange={e => setLicenseKey(e.target.value.toUpperCase())} 
+                <input
+                  type="text"
+                  value={licenseKey}
+                  onChange={e => setLicenseKey(e.target.value.toUpperCase())}
                   placeholder="PRO_XXXX-XXXX..."
                   className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
                 />
@@ -3275,10 +3289,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
               <SettingsSection title="Streaming" subtitle="RTMP + quality controls" defaultOpen>
                 <div>
                   <label className="text-gray-400 text-sm">Stream Key (YouTube/Twitch)</label>
-                  <input 
-                    type="password" 
-                    value={streamKey} 
-                    onChange={e => setStreamKey(e.target.value)} 
+                  <input
+                    type="password"
+                    value={streamKey}
+                    onChange={e => setStreamKey(e.target.value)}
                     placeholder="rtmp_key_12345..."
                     className="w-full bg-aether-800 border border-aether-700 rounded p-2 text-sm text-white focus:border-aether-500 outline-none"
                   />
@@ -3333,7 +3347,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
                 <div>
                   <label className="text-gray-400 text-sm">Stream Quality (Target Bitrate)</label>
-                  <select 
+                  <select
                     value={streamQuality}
                     onChange={(e) => {
                       const val = e.target.value as StreamQualityPreset;
