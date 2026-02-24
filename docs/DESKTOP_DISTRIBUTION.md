@@ -2,6 +2,8 @@
 
 This project can ship a real Windows desktop app (installer + portable), not a browser wrapper that depends on a hosted website.
 
+For a full end-to-end release runbook, see `docs/RELEASE_CHECKLIST.md`.
+
 ## Build artifacts
 
 ```powershell

@@ -24,3 +24,4 @@ This contains everything you need to run your app locally.
 - Compatibility shim only: `server/signaling.cjs` (deprecated)
 - Operations guide: `docs/RELAY_OPERATIONS.md`
 - Production setup guide (Render + Vercel): `docs/PROD_RENDER_VERCEL_SETUP.md`
+- Release checklist: `docs/RELEASE_CHECKLIST.md`
