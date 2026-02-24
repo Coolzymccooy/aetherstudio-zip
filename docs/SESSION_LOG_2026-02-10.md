@@ -355,4 +355,4 @@ If you want me to continue with **Stripe integration** or **mobile layout upgrad
 - Final status after follow-up commits:
   - `Vercel Deploy`: passing on latest `master`.
   - `Render Health Check`: passing on latest `master`.
-  - `Desktop Publish`: trigger is wired on tag push; requires `GH_TOKEN` secret in Actions for publish execution.
+  - `Desktop Publish`: workflow reaches publish gate and fails at `Ensure GH token exists` because `GH_TOKEN` is not set in repository Actions secrets.
