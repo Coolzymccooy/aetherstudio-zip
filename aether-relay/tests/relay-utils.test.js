@@ -50,6 +50,68 @@ test("normalizeDestinations accepts full RTMP stream URL as primary", () => {
   assert.equal(outputs[0], streamUrl);
 });
 
+test("normalizeDestinations accepts TikTok rtmp:// URL as primary", () => {
+  const tiktokUrl = "rtmp://push.tiktokcdn.com/live/stream-key-tiktok-123";
+  const outputs = normalizeDestinations({
+    streamKey: tiktokUrl,
+    primaryBase: "rtmps://a.rtmp.youtube.com/live2",
+    destinations: [],
+  });
+
+  assert.equal(outputs.length, 1);
+  assert.equal(outputs[0], tiktokUrl);
+});
+
+test("normalizeDestinations accepts Kick rtmps:// URL as primary", () => {
+  const kickUrl = "rtmps://fa723fc1b171.global-contribute.live-video.net/app/stream-key-kick-456";
+  const outputs = normalizeDestinations({
+    streamKey: kickUrl,
+    primaryBase: "rtmps://a.rtmp.youtube.com/live2",
+    destinations: [],
+  });
+
+  assert.equal(outputs.length, 1);
+  assert.equal(outputs[0], kickUrl);
+});
+
+test("normalizeDestinations handles all 5 platforms as multi-destination", () => {
+  const outputs = normalizeDestinations({
+    streamKey: "yt-key-123",
+    primaryBase: "rtmps://a.rtmp.youtube.com/live2",
+    maxDestinations: 5,
+    destinations: [
+      "rtmps://live.twitch.tv/app/twitch-key",
+      "rtmps://live-api-s.facebook.com:443/rtmp/fb-key",
+      "rtmp://push.tiktokcdn.com/live/tiktok-key",
+      "rtmps://fa723fc1b171.global-contribute.live-video.net/app/kick-key",
+    ],
+  });
+
+  assert.equal(outputs.length, 5);
+  assert.equal(outputs[0], "rtmps://a.rtmp.youtube.com/live2/yt-key-123");
+  assert.equal(outputs[1], "rtmps://live.twitch.tv/app/twitch-key");
+  assert.equal(outputs[2], "rtmps://live-api-s.facebook.com:443/rtmp/fb-key");
+  assert.equal(outputs[3], "rtmp://push.tiktokcdn.com/live/tiktok-key");
+  assert.equal(outputs[4], "rtmps://fa723fc1b171.global-contribute.live-video.net/app/kick-key");
+});
+
+test("buildFfmpegArgs uses tee muxer for multi-platform output", () => {
+  const outputs = [
+    "rtmps://a.rtmp.youtube.com/live2/yt-key",
+    "rtmps://live.twitch.tv/app/twitch-key",
+    "rtmp://push.tiktokcdn.com/live/tiktok-key",
+    "rtmps://fa723fc1b171.global-contribute.live-video.net/app/kick-key",
+  ];
+  const args = buildFfmpegArgs({ outputs });
+
+  assert.equal(args.includes("tee"), true);
+  const teeTarget = args[args.indexOf("tee") + 1];
+  for (const url of outputs) {
+    assert.equal(teeTarget.includes(url), true, `tee target must include ${url}`);
+  }
+  assert.equal(teeTarget.includes("onfail=ignore"), true);
+});
+
 test("queueCongestionLevel and congestionAction follow warn -> stepdown -> fatal", () => {
   const soft = 2 * 1024 * 1024;
   const hard = 8 * 1024 * 1024;
