@@ -146,6 +146,19 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [layers, setLayers] = useState<Layer[]>([]);
   const [audioTracks, setAudioTracks] = useState<AudioTrackConfig[]>([]);
   const [streamStatus, setStreamStatus] = useState<StreamStatus>(StreamStatus.IDLE);
+
+  // Prevent accidental refresh/close during live stream
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (streamStatus === StreamStatus.LIVE) {
+        e.preventDefault();
+        e.returnValue = ''; // Standard for most browsers
+        return ''; // Standard for some browsers
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [streamStatus]);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [rightPanelTab, setRightPanelTab] = useState<'properties' | 'ai' | 'inputs'>('ai');
   const [showSettings, setShowSettings] = useState(false);

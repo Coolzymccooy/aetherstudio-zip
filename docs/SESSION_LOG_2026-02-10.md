@@ -406,3 +406,43 @@ If you want me to continue with **Stripe integration** or **mobile layout upgrad
 
 #### docs/DESKTOP_DISTRIBUTION.md
 - Updated runtime behavior section to document cloud-first default and local-service opt-in override.
+
+---
+
+## Update (2026-02-24) - Pro Audio & UX Hardening
+
+### Goals
+- Implement professional-grade audio monitoring and signal analysis.
+- Resolve critical UX bugs (camera blackout on switch, tab jumping).
+- Overhaul help system for self-service troubleshooting.
+- Enhance UI legibility across the core Studio interface.
+
+### Changes implemented
+
+#### Pro Audio Monitoring (`AudioMixer.tsx`)
+- **High-Precision Metering**: Full rewrite using Web Audio API `AnalyserNode` for real-time RMS and Peak calculation.
+- **Signal Quality Intelligence**: Automatic categorization into `Silent`, `Low`, `Optimal`, `Hot`, and `Clipping` zones with visual indicators.
+- **Voice Clarity Engine**: Mid-range frequency analysis (300Hz-3kHz) to detect and highlight active speech.
+- **Delivery Verification**: Added a "Stream Feed Active" heartbeat badge to confirm signal delivery to the mix destination.
+- **Resource Optimization**: Refactored to share a single `AudioContext` from `StudioCore.tsx`, ensuring perfect sync and lower CPU overhead.
+
+#### Critical Bug Fixes (`StudioCore.tsx`)
+- **Black Screen on "Make Main"**: Removed `runTransition` wrapper from `makeMain` function which was applying a fade-to-black overlay during instant switches.
+- **Tab Jumping Fix**: Added logical guards to the `selectedLayerId` observer to prevent auto-switching to the 'Properties' tab when the user is actively working in the 'Inputs' panel.
+- **Default Transition**: Changed default system transition from `'fade'` to `'cut'` for more predictable default behavior.
+
+#### Help System Overhaul (`HelpModal.tsx`)
+- **Sidebar Navigation**: Replaced flat list with 11 categorized sections covering all major features.
+- **Expanded Knowledge Base**: Increased FAQ from 7 to 14 entries with detailed troubleshooting steps for common stream issues.
+- **Interactive Help Bot**: Added a searchable assistance interface with fuzzy matching and optimized keyboard support.
+
+#### UI Legibility & Contrast
+- **Font Scaling**: Increased base sizes for section headers (`xs` -> `13px`), subtitles, and helper text across the entire Studio sidebar.
+- **Contrast Optimization**: Adjusted gray levels (`text-gray-500` -> `text-gray-300`) and increased status badge weight for better visibility on high-DPI displays.
+- **Control Refinement**: Enlarged toggle switches and buttons by ~10% for improved click targets and visibility.
+
+### Verification status
+- `npm run build`: Pass (verified clean production bundle).
+- Audio Signal Analysis: Confirmed working across local and mobile inputs.
+- Camera Switching: Verified instant (no blackout) on "Make Main".
+- Repository: All changes pushed to `master` (commit `3c5a7b8`).
