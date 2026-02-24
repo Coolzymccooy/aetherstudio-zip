@@ -909,6 +909,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
               sourceId: data.sourceId,
               label: data.label,
             });
+          } else if (data?.type === "audience-message" && data.text) {
+            const category = data.category || "Message";
+            const formatted = `[${category}] ${data.text}`;
+            setAudienceMessages(prev => [...prev, formatted]);
+            setStatusMsg({ type: "info", text: `New audience message received: ${category}` });
           }
         });
       });

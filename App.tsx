@@ -36,14 +36,15 @@ export default function App() {
       const params = new URLSearchParams(search);
 
       const isCompanion = href.includes('mode=companion') || params.get('mode') === 'companion';
+      const isAudience = href.includes('mode=audience') || params.get('mode') === 'audience';
       const roomId = params.get('room');
       const signalUrl = params.get('signal');
 
-      if (isCompanion) {
+      if (isCompanion || isAudience) {
         // SAVE INTENT: Even if we redirect to login, remember the user wants to be in this room.
         if (roomId) localStorage.setItem('aether_target_room', roomId);
         if (signalUrl) localStorage.setItem('aether_signal_url', signalUrl);
-        localStorage.setItem('aether_mode', 'companion');
+        localStorage.setItem('aether_mode', isAudience ? 'audience' : 'companion');
         localStorage.setItem('aether_last_view', 'mobile');
 
         setView('mobile');
@@ -73,7 +74,7 @@ export default function App() {
       if (currentUser) {
         const savedMode = localStorage.getItem('aether_mode');
 
-        if (savedMode === 'companion') {
+        if (savedMode === 'companion' || savedMode === 'audience') {
           setView('mobile');
           localStorage.setItem('aether_last_view', 'mobile');
         } else if (view === 'landing') {

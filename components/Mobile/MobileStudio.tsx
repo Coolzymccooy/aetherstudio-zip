@@ -14,6 +14,7 @@ import {
   Edit2,
   Activity,
   X,
+  Send,
 } from "lucide-react";
 import Peer, { DataConnection, MediaConnection } from "peerjs";
 import { getPeerEnv } from "../../src/utils/peerEnv";
@@ -76,6 +77,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
 
   // --- State ---
   const wifiMode = getQueryParam("wifi") === "1";
+  const isAudienceMode = getQueryParam("mode") === "audience";
 
   const [roomId, setRoomId] = useState<string | null>(() => {
     return getQueryParam("room") || localStorage.getItem("aether_target_room");
@@ -108,6 +110,12 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   // quality
   const [camQuality, setCamQuality] = useState<CamQuality>(() => (wifiMode ? "720p" : "auto"));
   const [batteryInfo, setBatteryInfo] = useState<{ level: number; charging: boolean } | null>(null);
+
+  // Audience form
+  const [audienceMsg, setAudienceMsg] = useState("");
+  const [audienceCategory, setAudienceCategory] = useState("Question");
+  const [isSending, setIsSending] = useState(false);
+  const [sendSuccess, setSendSuccess] = useState(false);
 
   const addLog = useCallback((msg: string) => {
     console.log(`[Mobile] ${msg}`);
@@ -159,7 +167,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
       try {
         videoRef.current.pause();
         (videoRef.current as any).srcObject = null;
-      } catch {}
+      } catch { }
     }
     setIsCameraReady(false);
   }, []);
@@ -284,7 +292,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         // play best-effort (iOS sometimes rejects; preview can still work)
-        await videoRef.current.play().catch(() => {});
+        await videoRef.current.play().catch(() => { });
       }
 
       // after permissions, enumerate devices (labels populate)
@@ -314,14 +322,14 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
 
   // wake lock + initial camera
   useEffect(() => {
-    if (isSetupMode) return;
+    if (isSetupMode || isAudienceMode) return;
 
     initCamera();
 
     (navigator as any).wakeLock
       ?.request("screen")
       .then((l: any) => (wakeLockRef.current = l))
-      .catch(() => {});
+      .catch(() => { });
 
     return () => {
       wakeLockRef.current?.release?.();
@@ -337,7 +345,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
 
   // quality changes re-init only if not live
   useEffect(() => {
-    if (isSetupMode) return;
+    if (isSetupMode || isAudienceMode) return;
     if (isBroadcasting) return;
     initCamera();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -345,7 +353,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
 
   // facing mode change re-init (not while live)
   useEffect(() => {
-    if (isSetupMode) return;
+    if (isSetupMode || isAudienceMode) return;
     if (isBroadcasting) return;
     initCamera();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -372,7 +380,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
         const t = window.setTimeout(() => {
           try {
             conn.close();
-          } catch {}
+          } catch { }
           // retry
           hostCheckTimerRef.current = window.setTimeout(tick, 1200);
         }, 2000);
@@ -383,7 +391,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
           addLog("Host Found!");
           try {
             conn.close();
-          } catch {}
+          } catch { }
           stopHostChecker();
         });
 
@@ -391,7 +399,7 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
           window.clearTimeout(t);
           try {
             conn.close();
-          } catch {}
+          } catch { }
           hostCheckTimerRef.current = window.setTimeout(tick, 1200);
         });
       };
@@ -402,94 +410,94 @@ export const MobileStudio: React.FC<MobileStudioProps> = () => {
   );
 
   // --- PeerJS Cloud Connection ---
-useEffect(() => {
-  if (isSetupMode || !roomId) return;
+  useEffect(() => {
+    if (isSetupMode || !roomId) return;
 
-  stopHostChecker();
-  setIsCloudReady(false);
-  setHostFound(false);
-
-  const hostId = getCleanPeerId(roomId, "host");
-  const myId = `${getCleanPeerId(roomId, "client")}-${Math.floor(Math.random() * 1000)}`;
-
-  addLog(`ID: ${roomId} -> Cloud...`);
-
-  // ✅ Guard: if we already have a live peer, keep it (prevents WS churn / "closed before established")
-  const existing: any = peerRef.current;
-  if (existing && !existing.destroyed) {
-    // ensure we’re actively checking for the host
-    startHostChecker(existing, hostId);
-    setIsCloudReady(true);
-    return;
-  }
-
-  // Cleanup any previous peer only if it exists but is unusable
-  if (existing) {
-    try { existing.destroy(); } catch {}
-    peerRef.current = null;
-  }
-
-  const peerEnv = getPeerEnv();
-  console.log("PEER ENV RESOLVED:", peerEnv);
-
-  const peer = new Peer(myId, {
-    debug: 1,
-    host: peerEnv.host,
-    port: peerEnv.port,
-    path: peerEnv.path,
-    secure: peerEnv.secure,
-    config: {
-    iceServers: [
-      { urls: "stun:stun.l.google.com:19302" },
-      { urls: "stun:stun1.l.google.com:19302" },
-    ],
-  },
-  });
-
-  peerRef.current = peer;
-
-  peer.on("open", () => {
-    setIsCloudReady(true);
-    startHostChecker(peer, hostId);
-  });
-
-  peer.on("disconnected", () => {
-    // don’t destroy; allow peerjs reconnect logic
-    setIsCloudReady(false);
-    setHostFound(false);
-    addLog("Cloud disconnected. Reconnecting...");
-    try { (peer as any).reconnect?.(); } catch {}
-  });
-
-  peer.on("close", () => {
-    setIsCloudReady(false);
-    setHostFound(false);
-    addLog("Cloud closed");
-  });
-
-  peer.on("error", (err: any) => {
-    addLog(`Cloud Err: ${err?.type || "error"}`);
-    setIsCloudReady(false);
-    setHostFound(false);
-
-    // keep trying to find host if cloud blips
-    const p: any = peerRef.current;
-    if (p && !p.destroyed) {
-      startHostChecker(p, hostId);
-    }
-  });
-
-  return () => {
     stopHostChecker();
+    setIsCloudReady(false);
+    setHostFound(false);
 
-    // Only destroy if THIS effect created the current peer instance
-    const p: any = peerRef.current;
-    if (p === peer) {
-      try { peer.destroy(); } catch {}
+    const hostId = getCleanPeerId(roomId, "host");
+    const myId = `${getCleanPeerId(roomId, "client")}-${Math.floor(Math.random() * 1000)}`;
+
+    addLog(`ID: ${roomId} -> Cloud...`);
+
+    // ✅ Guard: if we already have a live peer, keep it (prevents WS churn / "closed before established")
+    const existing: any = peerRef.current;
+    if (existing && !existing.destroyed) {
+      // ensure we’re actively checking for the host
+      startHostChecker(existing, hostId);
+      setIsCloudReady(true);
+      return;
+    }
+
+    // Cleanup any previous peer only if it exists but is unusable
+    if (existing) {
+      try { existing.destroy(); } catch { }
       peerRef.current = null;
     }
-  };
-}, [addLog, isSetupMode, roomId, startHostChecker, stopHostChecker]);
+
+    const peerEnv = getPeerEnv();
+    console.log("PEER ENV RESOLVED:", peerEnv);
+
+    const peer = new Peer(myId, {
+      debug: 1,
+      host: peerEnv.host,
+      port: peerEnv.port,
+      path: peerEnv.path,
+      secure: peerEnv.secure,
+      config: {
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+        ],
+      },
+    });
+
+    peerRef.current = peer;
+
+    peer.on("open", () => {
+      setIsCloudReady(true);
+      startHostChecker(peer, hostId);
+    });
+
+    peer.on("disconnected", () => {
+      // don’t destroy; allow peerjs reconnect logic
+      setIsCloudReady(false);
+      setHostFound(false);
+      addLog("Cloud disconnected. Reconnecting...");
+      try { (peer as any).reconnect?.(); } catch { }
+    });
+
+    peer.on("close", () => {
+      setIsCloudReady(false);
+      setHostFound(false);
+      addLog("Cloud closed");
+    });
+
+    peer.on("error", (err: any) => {
+      addLog(`Cloud Err: ${err?.type || "error"}`);
+      setIsCloudReady(false);
+      setHostFound(false);
+
+      // keep trying to find host if cloud blips
+      const p: any = peerRef.current;
+      if (p && !p.destroyed) {
+        startHostChecker(p, hostId);
+      }
+    });
+
+    return () => {
+      stopHostChecker();
+
+      // Only destroy if THIS effect created the current peer instance
+      const p: any = peerRef.current;
+      if (p === peer) {
+        try { peer.destroy(); } catch { }
+        peerRef.current = null;
+      }
+    };
+  }, [addLog, isSetupMode, roomId, startHostChecker, stopHostChecker]);
 
   // --- Broadcast ---
   const startBroadcast = useCallback(async () => {
@@ -517,7 +525,7 @@ useEffect(() => {
       // close existing
       try {
         mediaConnRef.current?.close();
-      } catch {}
+      } catch { }
       mediaConnRef.current = null;
 
       const call = peerRef.current.call(hostId, streamRef.current, {
@@ -559,7 +567,7 @@ useEffect(() => {
       // optional data conn
       try {
         dataConnRef.current?.close();
-      } catch {}
+      } catch { }
       dataConnRef.current = null;
 
       const dc = peerRef.current.connect(hostId);
@@ -576,53 +584,89 @@ useEffect(() => {
     } catch (e) {
       addLog("Call Failed");
     }
-  }, [addLog, initCamera, isCameraReady, roomId]);
+  }, [addLog, initCamera, isCameraReady, roomId, sourceId, sourceLabel, wifiMode]);
+
+  const sendAudienceMessage = useCallback(() => {
+    if (!audienceMsg.trim() || !roomId || !peerRef.current) return;
+
+    setIsSending(true);
+    const hostId = getCleanPeerId(roomId, "host");
+    const conn = peerRef.current.connect(hostId, { reliable: true });
+
+    const timeout = setTimeout(() => {
+      setIsSending(false);
+      addLog("Send timed out");
+      conn.close();
+    }, 5000);
+
+    conn.on("open", () => {
+      clearTimeout(timeout);
+      conn.send({
+        type: "audience-message",
+        text: audienceMsg.trim(),
+        category: audienceCategory,
+      });
+      setTimeout(() => {
+        conn.close();
+        setIsSending(false);
+        setSendSuccess(true);
+        setAudienceMsg("");
+        setTimeout(() => setSendSuccess(false), 3000);
+      }, 500);
+    });
+
+    conn.on("error", () => {
+      clearTimeout(timeout);
+      setIsSending(false);
+      addLog("Failed to connect to host");
+    });
+  }, [audienceMsg, audienceCategory, roomId, addLog]);
 
   // --- Relay WebSocket (Mobile) ---
-useEffect(() => {
-  if (isSetupMode || !roomId) return;
+  useEffect(() => {
+    if (isSetupMode || !roomId) return;
 
-  const wsUrl = import.meta.env.VITE_SIGNAL_URL as string | undefined;
-  if (!wsUrl) return;
+    const wsUrl = import.meta.env.VITE_SIGNAL_URL as string | undefined;
+    if (!wsUrl) return;
 
-  // close any previous relay socket
-  try { relayWsRef.current?.close(); } catch {}
-  relayWsRef.current = null;
-
-  let ws: WebSocket | null = null;
-
-  try {
-    ws = new WebSocket(wsUrl);
-    relayWsRef.current = ws;
-
-    ws.onopen = () => {
-      addLog("Relay connected");
-      ws?.send(JSON.stringify({
-        type: "join",
-        role: "client",
-        sessionId: roomId,
-        token: import.meta.env.VITE_RELAY_TOKEN, // optional
-      }));
-    };
-
-    ws.onmessage = (e) => {
-      // optional: addLog(`Relay msg: ${String(e.data).slice(0, 80)}`);
-    };
-
-    ws.onerror = () => addLog("Relay connection failed");
-    ws.onclose = () => addLog("Relay disconnected");
-  } catch {
-    addLog("Relay failed to start");
-  }
-
-  return () => {
-    try { ws?.close(); } catch {}
-    ws = null;
-
-    try { relayWsRef.current?.close(); } catch {}
+    // close any previous relay socket
+    try { relayWsRef.current?.close(); } catch { }
     relayWsRef.current = null;
-  };
-}, [isSetupMode, roomId, addLog]);
+
+    let ws: WebSocket | null = null;
+
+    try {
+      ws = new WebSocket(wsUrl);
+      relayWsRef.current = ws;
+
+      ws.onopen = () => {
+        addLog("Relay connected");
+        ws?.send(JSON.stringify({
+          type: "join",
+          role: "client",
+          sessionId: roomId,
+          token: import.meta.env.VITE_RELAY_TOKEN, // optional
+        }));
+      };
+
+      ws.onmessage = (e) => {
+        // optional: addLog(`Relay msg: ${String(e.data).slice(0, 80)}`);
+      };
+
+      ws.onerror = () => addLog("Relay connection failed");
+      ws.onclose = () => addLog("Relay disconnected");
+    } catch {
+      addLog("Relay failed to start");
+    }
+
+    return () => {
+      try { ws?.close(); } catch { }
+      ws = null;
+
+      try { relayWsRef.current?.close(); } catch { }
+      relayWsRef.current = null;
+    };
+  }, [isSetupMode, roomId, addLog]);
 
 
   // --- Interruption handling ---
@@ -683,17 +727,17 @@ useEffect(() => {
 
     try {
       dataConnRef.current?.close();
-    } catch {}
+    } catch { }
     dataConnRef.current = null;
 
     try {
       mediaConnRef.current?.close();
-    } catch {}
+    } catch { }
     mediaConnRef.current = null;
 
     try {
       peerRef.current?.destroy();
-    } catch {}
+    } catch { }
     peerRef.current = null;
   };
 
@@ -735,6 +779,74 @@ useEffect(() => {
     );
   }
 
+  // --- Audience Mode UI ---
+  if (isAudienceMode) {
+    return (
+      <div className="fixed inset-0 bg-[#0f0518] flex flex-col items-center justify-center p-6 text-white overflow-y-auto">
+        <div className="max-w-md w-full space-y-6">
+          <div className="text-center">
+            <div className="w-16 h-16 bg-aether-accent/20 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-aether-accent/30 shadow-[0_0_20px_rgba(45,212,191,0.2)]">
+              <Radio className="text-aether-accent" size={32} />
+            </div>
+            <h1 className="text-2xl font-bold">Audience Portal</h1>
+            <p className="text-gray-400 mt-2 text-sm">Send a message to the broadcast</p>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1.5 tracking-widest">Category</label>
+              <div className="flex flex-wrap gap-2">
+                {['Question', 'Prayer', 'Testimony', 'Welcome'].map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setAudienceCategory(cat)}
+                    className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${audienceCategory === cat ? 'bg-aether-accent text-white shadow-lg' : 'bg-white/5 text-gray-400 border border-white/5'}`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1.5 tracking-widest">Message</label>
+              <textarea
+                value={audienceMsg}
+                onChange={(e) => setAudienceMsg(e.target.value)}
+                placeholder="Type your message here..."
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-4 text-sm text-white focus:border-aether-accent outline-none h-32 resize-none"
+              />
+            </div>
+
+            <button
+              onClick={sendAudienceMessage}
+              disabled={isSending || !audienceMsg.trim() || !hostFound}
+              className="w-full bg-gradient-to-r from-aether-500 to-aether-accent text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {isSending ? <Loader2 className="animate-spin" size={20} /> : <Send size={20} />}
+              {isSending ? 'Sending...' : 'Send to Studio'}
+            </button>
+
+            {!hostFound && isCloudReady && (
+              <p className="text-[10px] text-yellow-500 text-center animate-pulse">Waiting for Studio to be online...</p>
+            )}
+
+            {sendSuccess && (
+              <div className="bg-green-500/10 border border-green-500/20 text-green-400 rounded-xl p-4 flex items-center gap-3 animate-in zoom-in-95">
+                <CheckCircle size={20} />
+                <span className="text-sm font-medium">Message sent successfully!</span>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-8 text-center opacity-30">
+            <p className="text-[9px] font-mono tracking-widest uppercase">Connected to Room: {roomId}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // --- Broadcasting Mode ---
   return (
     <div className="fixed inset-0 bg-black flex flex-col items-center justify-center text-white overflow-hidden">
@@ -743,9 +855,8 @@ useEffect(() => {
         autoPlay
         muted
         playsInline
-        className={`absolute inset-0 w-full h-full object-cover z-0 transition-opacity duration-500 ${
-          isBroadcasting ? "opacity-100" : "opacity-40 blur-sm"
-        }`}
+        className={`absolute inset-0 w-full h-full object-cover z-0 transition-opacity duration-500 ${isBroadcasting ? "opacity-100" : "opacity-40 blur-sm"
+          }`}
       />
 
       {isInterrupted && (
@@ -808,9 +919,8 @@ useEffect(() => {
                     setShowAudioSettings(false);
                     setTimeout(() => initCamera(), 50);
                   }}
-                  className={`w-full p-4 rounded-xl text-left text-sm flex items-center justify-between ${
-                    selectedAudioId === device.deviceId ? "bg-aether-600 text-white" : "bg-white/5 text-gray-300"
-                  }`}
+                  className={`w-full p-4 rounded-xl text-left text-sm flex items-center justify-between ${selectedAudioId === device.deviceId ? "bg-aether-600 text-white" : "bg-white/5 text-gray-300"
+                    }`}
                 >
                   <span>{device.label || "Microphone"}</span>
                   {selectedAudioId === device.deviceId && <CheckCircle size={16} />}
