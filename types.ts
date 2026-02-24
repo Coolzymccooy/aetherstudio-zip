@@ -16,12 +16,21 @@ export interface LayerStyle {
   circular?: boolean; // For Camo-like circle crop
   scrolling?: boolean; // Text ticker
   scrollSpeed?: number; // Pixels per frame
-  
+
   // Text Specific
   fontSize?: number;
   fontFamily?: string;
   fontWeight?: string; // 'normal' | 'bold'
   color?: string;
+
+  // Lower-third / overlay rendering
+  bgColor?: string;       // Background box color (e.g. "rgba(0,0,0,0.75)")
+  bgPadding?: number;     // Padding inside background box (px)
+  bgRounding?: number;    // Border radius for background box
+  accentColor?: string;   // Left accent bar color
+  accentWidth?: number;   // Width of left accent bar (px)
+  slideIn?: boolean;      // Animate in from left edge
+  slideSpeed?: number;    // px per frame for slide animation (default 60)
 }
 
 export interface Layer {

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Monitor, Camera, Image as ImageIcon, Type, Circle, Zap, Settings, PlaySquare, StopCircle, Radio, X, Sliders, Sparkles, Download, Package, FolderInput, Network, ExternalLink, AlertCircle, Smartphone, HelpCircle, Disc, Square, Cloud, LogOut, Link as LinkIcon, RefreshCw, Activity, Tv } from 'lucide-react';
+import { Monitor, Camera, Image as ImageIcon, Type, Circle, Zap, Settings, PlaySquare, StopCircle, Radio, X, Sliders, Sparkles, Download, Package, FolderInput, Network, ExternalLink, AlertCircle, AlertTriangle, Smartphone, HelpCircle, Disc, Square, Cloud, LogOut, Link as LinkIcon, RefreshCw, Activity, Tv, ChevronRight } from 'lucide-react';
 import { getPeerEnv } from "../../src/utils/peerEnv";
 import { CanvasStage } from './CanvasStage';
 import { AudioMixer } from './AudioMixer';
@@ -209,6 +209,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [composerMode, setComposerMode] = useState(false);
   const [autoDirectorOn, setAutoDirectorOn] = useState(() => localStorage.getItem('aether_auto_director') === 'true');
   const [autoDirectorInterval, setAutoDirectorInterval] = useState(() => Number(localStorage.getItem('aether_auto_director_interval') || 12));
+  const [autoDirectorMode, setAutoDirectorMode] = useState<'sequential' | 'random' | 'audio_reactive'>(() => (localStorage.getItem('aether_auto_director_mode') as any) || 'sequential');
+  const [autoDirectorCountdown, setAutoDirectorCountdown] = useState(0);
 
   const [lowerThirdName, setLowerThirdName] = useState(() => localStorage.getItem('aether_lower_third_name') || 'Guest Name');
   const [lowerThirdTitle, setLowerThirdTitle] = useState(() => localStorage.getItem('aether_lower_third_title') || 'Title / Role');
@@ -218,6 +220,25 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [tickerMessage, setTickerMessage] = useState(() => localStorage.getItem('aether_ticker_message') || '');
   const [pinnedVisible, setPinnedVisible] = useState(false);
   const [tickerVisible, setTickerVisible] = useState(false);
+
+  // Audience message queue
+  const [audienceMessages, setAudienceMessages] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('aether_audience_messages') || '[]'); } catch { return []; }
+  });
+  const [audienceNewMsg, setAudienceNewMsg] = useState('');
+  const [audienceRotateOn, setAudienceRotateOn] = useState(false);
+  const [audienceRotateInterval, setAudienceRotateInterval] = useState(8);
+  const [audienceCurrentIdx, setAudienceCurrentIdx] = useState(0);
+
+  // Lower third presets
+  const [lowerThirdPresets, setLowerThirdPresets] = useState<Array<{ id: string; name: string; title: string }>>(() => {
+    try { return JSON.parse(localStorage.getItem('aether_lt_presets') || '[]'); } catch { return []; }
+  });
+  const [lowerThirdDuration, setLowerThirdDuration] = useState(() => Number(localStorage.getItem('aether_lt_duration') || 5));
+  const [lowerThirdAccentColor, setLowerThirdAccentColor] = useState(() => localStorage.getItem('aether_lt_accent') || '#d946ef');
+
+  // Phone connection timestamps
+  const phoneConnectedAtRef = useRef<Map<string, number>>(new Map());
 
   type StreamDestination = { id: string; label: string; url: string; enabled: boolean };
   const [destinations, setDestinations] = useState<StreamDestination[]>(() => {
@@ -232,9 +253,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   type ScenePreset = {
     id: string;
     name: string;
-    layout: 'freeform' | 'main_thumbs' | 'grid_2x2';
+    layout: 'freeform' | 'main_thumbs' | 'grid_2x2' | 'side_by_side' | 'pip_corner';
     mainLayerId?: string | null;
     positions: Array<{ layerId: string; x: number; y: number; width: number; height: number; zIndex: number }>;
+    composerMode?: boolean;
+    transitionMode?: string;
   };
   const [scenePresets, setScenePresets] = useState<ScenePreset[]>(() => {
     try {
@@ -245,9 +268,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     }
   });
   const [presetName, setPresetName] = useState('Main + Thumbs');
-  const [layoutTemplate, setLayoutTemplate] = useState<'freeform' | 'main_thumbs' | 'grid_2x2'>('main_thumbs');
+  const [layoutTemplate, setLayoutTemplate] = useState<'freeform' | 'main_thumbs' | 'grid_2x2' | 'side_by_side' | 'pip_corner'>('main_thumbs');
 
-  const [transitionMode, setTransitionMode] = useState<'cut' | 'fade'>(() => {
+  const [transitionMode, setTransitionMode] = useState<'cut' | 'fade' | 'dip_white'>(() => {
     return (localStorage.getItem('aether_transition_mode') as any) || 'fade';
   });
   const [transitionMs, setTransitionMs] = useState(() => Number(localStorage.getItem('aether_transition_ms') || 300));
@@ -443,17 +466,22 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   useEffect(() => {
     localStorage.setItem('aether_auto_director', String(autoDirectorOn));
     localStorage.setItem('aether_auto_director_interval', String(autoDirectorInterval || 12));
-  }, [autoDirectorOn, autoDirectorInterval]);
+    localStorage.setItem('aether_auto_director_mode', autoDirectorMode);
+  }, [autoDirectorOn, autoDirectorInterval, autoDirectorMode]);
 
   useEffect(() => {
     localStorage.setItem('aether_lower_third_name', lowerThirdName);
     localStorage.setItem('aether_lower_third_title', lowerThirdTitle);
-  }, [lowerThirdName, lowerThirdTitle]);
+    localStorage.setItem('aether_lt_duration', String(lowerThirdDuration));
+    localStorage.setItem('aether_lt_accent', lowerThirdAccentColor);
+    localStorage.setItem('aether_lt_presets', JSON.stringify(lowerThirdPresets));
+  }, [lowerThirdName, lowerThirdTitle, lowerThirdDuration, lowerThirdAccentColor, lowerThirdPresets]);
 
   useEffect(() => {
     localStorage.setItem('aether_pinned_message', pinnedMessage);
     localStorage.setItem('aether_ticker_message', tickerMessage);
-  }, [pinnedMessage, tickerMessage]);
+    localStorage.setItem('aether_audience_messages', JSON.stringify(audienceMessages));
+  }, [pinnedMessage, tickerMessage, audienceMessages]);
 
   useEffect(() => {
     localStorage.setItem('aether_stream_destinations', JSON.stringify(destinations));
@@ -2169,18 +2197,20 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
   const makeMain = (layerId?: string) => {
     if (!layerId) return;
-    // Skip runTransition to avoid fade-to-black effect that causes camera blackout
-    setLayers(prev => {
-      const maxZ = prev.reduce((m, l) => Math.max(m, l.zIndex), 0) + 1;
-      return prev.map(l => l.id === layerId
-        ? { ...l, x: 0, y: 0, width: 1920, height: 1080, zIndex: maxZ, visible: true }
-        : { ...l, visible: l.visible ?? true }
-      );
-    });
-    setSelectedLayerId(layerId);
-    if (composerMode) {
-      setTimeout(() => applyComposerLayout(layerId), 0);
-    }
+    const action = () => {
+      setLayers(prev => {
+        const maxZ = prev.reduce((m, l) => Math.max(m, l.zIndex), 0) + 1;
+        return prev.map(l => l.id === layerId
+          ? { ...l, x: 0, y: 0, width: 1920, height: 1080, zIndex: maxZ, visible: true }
+          : { ...l, visible: l.visible ?? true }
+        );
+      });
+      setSelectedLayerId(layerId);
+      if (composerMode) {
+        setTimeout(() => applyComposerLayout(layerId), 0);
+      }
+    };
+    runTransition(action);
   };
 
   const ensureLowerThirdLayers = () => {
@@ -2196,12 +2226,17 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         label: 'Lower Third Name',
         visible: lowerThirdVisible,
         x: 60,
-        y: 600,
-        width: 900,
-        height: 60,
+        y: 880,
+        width: 800,
+        height: 52,
         content: lowerThirdName,
         zIndex: 900,
-        style: { fontSize: 44, fontFamily: 'Inter', fontWeight: 'bold', color: '#ffffff' },
+        style: {
+          fontSize: 36, fontFamily: 'Inter', fontWeight: 'bold', color: '#ffffff',
+          bgColor: 'rgba(0,0,0,0.8)', bgPadding: 16, bgRounding: 8,
+          accentColor: lowerThirdAccentColor, accentWidth: 5,
+          slideIn: true, slideSpeed: 80,
+        },
       },
       {
         id: titleId,
@@ -2209,12 +2244,16 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         label: 'Lower Third Title',
         visible: lowerThirdVisible,
         x: 60,
-        y: 652,
-        width: 900,
-        height: 40,
+        y: 948,
+        width: 800,
+        height: 36,
         content: lowerThirdTitle,
         zIndex: 901,
-        style: { fontSize: 26, fontFamily: 'Inter', fontWeight: 'normal', color: '#cbd5e1' },
+        style: {
+          fontSize: 22, fontFamily: 'Inter', fontWeight: 'normal', color: '#94a3b8',
+          bgColor: 'rgba(0,0,0,0.65)', bgPadding: 12, bgRounding: 6,
+          slideIn: true, slideSpeed: 70,
+        },
       }
     ]));
   };
@@ -2390,17 +2429,42 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       selectedLayerId ||
       sourcesWithLayers[0].layerId;
 
+    const currentLayout = layoutTemplate;
+
     setLayers(prev => {
       const base = prev.map(l => ({ ...l }));
+
+      if (currentLayout === 'side_by_side') {
+        // Two cameras side by side (50/50)
+        const targets = sourcesWithLayers.slice(0, 2);
+        return base.map(l => {
+          const idx = targets.findIndex(s => s.layerId === l.id);
+          if (idx === -1) { const src = sourcesWithLayers.find(s => s.layerId === l.id); if (!src) return l; return { ...l, visible: false }; }
+          return { ...l, x: idx * (CAM_W / 2), y: 0, width: CAM_W / 2, height: CAM_H, zIndex: 100 + idx, visible: true };
+        });
+      }
+
+      if (currentLayout === 'pip_corner') {
+        // Main full-screen, secondary as small PiP bottom-right
+        const PIP_W = 320; const PIP_H = 180; const PIP_PAD = 24;
+        let pipIdx = 0;
+        return base.map(l => {
+          const src = sourcesWithLayers.find(s => s.layerId === l.id);
+          if (!src) return l;
+          if (l.id === mainLayerId) return { ...l, x: 0, y: 0, width: CAM_W, height: CAM_H, zIndex: 100, visible: true };
+          const x = CAM_W - PIP_W - PIP_PAD;
+          const y = CAM_H - PIP_H - PIP_PAD - pipIdx * (PIP_H + 8);
+          pipIdx++;
+          return { ...l, x, y, width: PIP_W, height: PIP_H, zIndex: 200 + pipIdx, visible: true, style: { ...l.style, rounded: 12 } };
+        });
+      }
+
+      // Default: main_thumbs
       let thumbIdx = 0;
       return base.map(l => {
         const src = sourcesWithLayers.find(s => s.layerId === l.id);
         if (!src) return l;
-
-        if (l.id === mainLayerId) {
-          return { ...l, x: 0, y: 0, width: CAM_W, height: CAM_H, zIndex: 100 };
-        }
-
+        if (l.id === mainLayerId) return { ...l, x: 0, y: 0, width: CAM_W, height: CAM_H, zIndex: 100 };
         const x = CAM_W - THUMB_W - PAD;
         const y = PAD + thumbIdx * (THUMB_H + PAD);
         thumbIdx += 1;
@@ -2421,7 +2485,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     const currentLayerId = selectedLayerId;
     const idx = cameraSources.findIndex(s => s.layerId === currentLayerId);
     const next = cameraSources[(idx + 1) % cameraSources.length] || cameraSources[0];
-    makeMain(next.layerId);
+    runTransition(() => makeMain(next.layerId));
   };
 
   const emergencyWide = () => {
@@ -2494,23 +2558,78 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     transitionRafRef.current = requestAnimationFrame(step);
   };
 
+  // --- Transition overlay color (passed to CanvasStage) ---
+  const transitionColor = transitionMode === 'dip_white' ? '#ffffff' : '#000000';
+
   useEffect(() => {
     if (autoDirectorTimerRef.current) {
       window.clearInterval(autoDirectorTimerRef.current);
       autoDirectorTimerRef.current = null;
     }
-    if (!autoDirectorOn || cameraSources.length < 2) return;
-    const intervalMs = Math.max(3, Number(autoDirectorInterval) || 12) * 1000;
+    if (!autoDirectorOn || cameraSources.length < 2) { setAutoDirectorCountdown(0); return; }
+    const intervalSec = Math.max(3, Number(autoDirectorInterval) || 12);
+    const intervalMs = intervalSec * 1000;
+    let lastSwitchAt = Date.now();
+
+    // Countdown ticker (updates every second)
+    const countdownTimer = window.setInterval(() => {
+      const elapsed = (Date.now() - lastSwitchAt) / 1000;
+      setAutoDirectorCountdown(Math.max(0, Math.ceil(intervalSec - elapsed)));
+    }, 500);
+
     autoDirectorTimerRef.current = window.setInterval(() => {
-      cutToNext();
+      lastSwitchAt = Date.now();
+      if (autoDirectorMode === 'random') {
+        // Random: pick a camera that isn't the current one
+        const others = cameraSources.filter(s => s.layerId && s.layerId !== selectedLayerId);
+        if (others.length > 0) {
+          const pick = others[Math.floor(Math.random() * others.length)];
+          makeMain(pick.layerId);
+        } else {
+          cutToNext();
+        }
+      } else if (autoDirectorMode === 'audio_reactive') {
+        // Audio-reactive: pick camera with loudest mic
+        let bestDb = -Infinity;
+        let bestLayerId: string | undefined;
+        cameraSources.forEach(s => {
+          if (!s.audioTrackId || !s.layerId) return;
+          const hg = hyperGateNodes.current.get(s.audioTrackId);
+          if (!hg) return;
+          const db = rmsDbFromAnalyser(hg.analyser);
+          if (db > bestDb) { bestDb = db; bestLayerId = s.layerId; }
+        });
+        if (bestLayerId && bestLayerId !== selectedLayerId) {
+          makeMain(bestLayerId);
+        }
+      } else {
+        cutToNext();
+      }
     }, intervalMs);
+
     return () => {
       if (autoDirectorTimerRef.current) {
         window.clearInterval(autoDirectorTimerRef.current);
         autoDirectorTimerRef.current = null;
       }
+      window.clearInterval(countdownTimer);
+      setAutoDirectorCountdown(0);
     };
-  }, [autoDirectorOn, autoDirectorInterval, cameraSources.length, cutToNext]);
+  }, [autoDirectorOn, autoDirectorInterval, autoDirectorMode, cameraSources.length]);
+
+  // --- Audience message rotation ---
+  useEffect(() => {
+    if (!audienceRotateOn || audienceMessages.length === 0) return;
+    const intervalMs = Math.max(3, audienceRotateInterval) * 1000;
+    const timer = window.setInterval(() => {
+      setAudienceCurrentIdx(prev => {
+        const next = (prev + 1) % audienceMessages.length;
+        setPinnedMessage(audienceMessages[next] || '');
+        return next;
+      });
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [audienceRotateOn, audienceRotateInterval, audienceMessages]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -2747,7 +2866,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
               onSelectLayer={setSelectedLayerId}
               onUpdateLayer={updateLayer}
               isPro={isPro}
-              transitionOverlay={{ alpha: transitionAlpha, color: '#000000' }}
+              transitionOverlay={{ alpha: transitionAlpha, color: transitionColor, type: transitionMode === 'dip_white' ? 'white' : 'black' }}
             />
           </div>
           <AudioMixer
@@ -2771,246 +2890,374 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             )}
             {rightPanelTab === 'inputs' && (
               <div className="h-full overflow-y-auto p-4 pb-24 space-y-3">
+
+                {/* ── Toggle Switch Helper ── */}
+                {/* Inline CSS for custom toggle switches */}
+                <style>{`
+                  .aether-toggle { position: relative; display: inline-flex; width: 36px; height: 20px; cursor: pointer; }
+                  .aether-toggle input { opacity: 0; width: 0; height: 0; }
+                  .aether-toggle .slider { position: absolute; inset: 0; background: #1e1b2e; border: 1px solid #3b3660; border-radius: 999px; transition: all .25s ease; }
+                  .aether-toggle .slider::before { content: ''; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: #6b7280; transition: all .25s ease; }
+                  .aether-toggle input:checked + .slider { background: #7c3aed; border-color: #8b5cf6; }
+                  .aether-toggle input:checked + .slider::before { transform: translateX(16px); background: #ffffff; }
+                  .section-btn { padding: 4px 10px; font-size: 10px; border-radius: 6px; font-weight: 500; transition: all .15s ease; }
+                  .section-btn:active { transform: scale(0.95); }
+                  .section-btn-primary { background: linear-gradient(135deg, #7c3aed, #6d28d9); color: white; }
+                  .section-btn-primary:hover { background: linear-gradient(135deg, #8b5cf6, #7c3aed); }
+                  .section-btn-danger { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid rgba(239,68,68,0.25); }
+                  .section-btn-danger:hover { background: rgba(239,68,68,0.25); }
+                  .section-btn-ghost { background: rgba(139,92,246,0.08); color: #a5b4fc; border: 1px solid rgba(139,92,246,0.2); }
+                  .section-btn-ghost:hover { background: rgba(139,92,246,0.15); }
+                  .section-input { width: 100%; background: #110b20; border: 1px solid #2e2650; border-radius: 6px; padding: 6px 10px; font-size: 11px; color: #e2e8f0; outline: none; transition: border .15s; }
+                  .section-input:focus { border-color: #7c3aed; }
+                  .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+                  .status-live { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); }
+                  .status-pending { background: rgba(234,179,8,0.12); color: #fbbf24; border: 1px solid rgba(234,179,8,0.25); }
+                  .status-error { background: rgba(239,68,68,0.12); color: #f87171; border: 1px solid rgba(239,68,68,0.25); }
+                  @keyframes pulse-glow { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); } 50% { box-shadow: 0 0 12px 4px rgba(239,68,68,0.2); } }
+                  .emergency-pulse { animation: pulse-glow 1.5s ease-in-out infinite; }
+                `}</style>
+
+                {/* ─── INPUT MANAGER ─── */}
                 <CollapsibleSection
-                  title="Input Manager"
-                  subtitle="Local cameras and phones"
+                  title="📹 Input Manager"
+                  subtitle={`${cameraSources.length} source${cameraSources.length !== 1 ? 's' : ''} active`}
                   open={inputsSection === 'input-manager'}
                   onToggle={(open) => setInputsSection(open ? 'input-manager' : '')}
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="text-[10px] text-gray-500">Add sources and manage live cuts</div>
-                    <div className="flex gap-2">
-                      <button onClick={() => setShowDeviceSelector(true)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Add Local</button>
-                      <button onClick={createPhoneSource} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Add Phone</button>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[10px] text-gray-500">Add sources & manage live cuts</div>
+                    <div className="flex gap-1.5">
+                      <button onClick={() => setShowDeviceSelector(true)} className="section-btn section-btn-ghost flex items-center gap-1"><Camera size={10} /> Local</button>
+                      <button onClick={createPhoneSource} disabled={phoneSlotsFull} className="section-btn section-btn-ghost flex items-center gap-1"><Smartphone size={10} /> Phone</button>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button onClick={cutToNext} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Cut To Next</button>
-                    <button onClick={emergencyWide} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Emergency Wide</button>
+                  <div className="flex gap-2 mb-3">
+                    <button onClick={cutToNext} className="section-btn section-btn-primary flex items-center gap-1 flex-1 justify-center"><ChevronRight size={12} /> Cut To Next</button>
+                    <button onClick={emergencyWide} className="section-btn section-btn-danger flex items-center gap-1 flex-1 justify-center emergency-pulse"><AlertTriangle size={12} /> Emergency Wide</button>
                   </div>
+
+                  {cameraSources.length === 0 && (
+                    <div className="text-[10px] text-gray-500 border border-dashed border-aether-700 rounded-lg p-3 text-center">No camera inputs yet. Add a local or phone camera.</div>
+                  )}
+
+                  {cameraSources.map((src, idx) => (
+                    <div key={src.id} className="flex items-center gap-2.5 bg-gradient-to-r from-aether-800/60 to-aether-800/30 border border-aether-700/60 rounded-lg p-2 mb-1.5 hover:border-aether-600 transition-colors">
+                      <div className="w-6 h-6 rounded-full bg-aether-700 flex items-center justify-center text-[10px] font-bold text-aether-300 shrink-0">#{idx + 1}</div>
+                      <SourcePreview stream={src.stream} />
+                      <div className="flex-1 min-w-0">
+                        <input value={src.label} onChange={(e) => updateSourceLabel(src.id, e.target.value)} className="w-full bg-transparent text-xs text-white outline-none border-b border-transparent focus:border-aether-500 truncate" />
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className={`status-badge ${src.status === 'live' ? 'status-live' : src.status === 'pending' ? 'status-pending' : 'status-error'}`}>
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ background: src.status === 'live' ? '#4ade80' : src.status === 'pending' ? '#fbbf24' : '#f87171' }} />
+                            {src.status}
+                          </span>
+                          <span className="text-[9px] text-gray-600">Press {idx + 1}</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1 shrink-0">
+                        <button onClick={() => makeMain(src.layerId)} className="section-btn section-btn-primary">Main</button>
+                        {src.audioTrackId && <button onClick={() => setSourceAudioActive(src.id)} className="section-btn section-btn-ghost">Audio</button>}
+                        <button onClick={() => removeSource(src.id)} className="section-btn section-btn-danger">✕</button>
+                      </div>
+                    </div>
+                  ))}
                 </CollapsibleSection>
 
+                {/* ─── COMPOSER MODE ─── */}
                 <CollapsibleSection
-                  title="Composer Mode"
-                  subtitle="Main + thumbnails layout"
+                  title="🖼️ Composer Mode"
+                  subtitle={composerMode ? layoutTemplate.replace('_', ' ') : 'Off'}
                   open={inputsSection === 'composer'}
                   onToggle={(open) => setInputsSection(open ? 'composer' : '')}
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="text-[10px] text-gray-500">Apply a staged layout to the program view</div>
-                    <div className="flex items-center gap-2">
-                      <button onClick={applyComposerLayout} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Apply</button>
-                      <label className="text-[10px] text-gray-300 flex items-center gap-1">
-                        <input type="checkbox" checked={composerMode} onChange={(e) => setComposerMode(e.target.checked)} />
-                        On
-                      </label>
-                    </div>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[10px] text-gray-400">Staged layout mode</span>
+                    <label className="aether-toggle">
+                      <input type="checkbox" checked={composerMode} onChange={(e) => setComposerMode(e.target.checked)} />
+                      <span className="slider" />
+                    </label>
                   </div>
+                  <div className="grid grid-cols-4 gap-1.5 mb-3">
+                    {[
+                      { id: 'main_thumbs' as const, label: 'Main+Th', icon: '▣' },
+                      { id: 'side_by_side' as const, label: 'Split', icon: '◫' },
+                      { id: 'pip_corner' as const, label: 'PiP', icon: '◲' },
+                      { id: 'grid_2x2' as const, label: 'Grid', icon: '⊞' },
+                    ].map(lt => (
+                      <button key={lt.id} onClick={() => { setLayoutTemplate(lt.id); if (composerMode) setTimeout(() => applyComposerLayout(), 0); }}
+                        className={`flex flex-col items-center gap-0.5 p-2 rounded-lg border text-[10px] transition-all ${layoutTemplate === lt.id ? 'border-aether-500 bg-aether-700/40 text-white' : 'border-aether-700 bg-aether-800/30 text-gray-400 hover:border-aether-600'
+                          }`}
+                      >
+                        <span className="text-lg">{lt.icon}</span>
+                        <span>{lt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={() => applyComposerLayout()} className="section-btn section-btn-primary w-full">Apply Layout</button>
                 </CollapsibleSection>
 
+                {/* ─── AUTO-DIRECTOR ─── */}
                 <CollapsibleSection
-                  title="Auto-Director"
-                  subtitle="Auto switches cameras on a timer"
+                  title="🤖 Auto-Director"
+                  subtitle={autoDirectorOn ? `${autoDirectorMode} · ${autoDirectorCountdown}s` : 'Off'}
                   open={inputsSection === 'auto-director'}
                   onToggle={(open) => setInputsSection(open ? 'auto-director' : '')}
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="text-[10px] text-gray-500">Rotate through inputs automatically</div>
-                    <label className="text-[10px] text-gray-300 flex items-center gap-1">
-                      <input type="checkbox" checked={autoDirectorOn} onChange={(e) => setAutoDirectorOn(e.target.checked)} />
-                      On
-                    </label>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[10px] text-gray-400">Auto-switch cameras</span>
+                    <div className="flex items-center gap-2">
+                      {autoDirectorOn && (
+                        <span className="status-badge status-live">{autoDirectorCountdown}s</span>
+                      )}
+                      <label className="aether-toggle">
+                        <input type="checkbox" checked={autoDirectorOn} onChange={(e) => setAutoDirectorOn(e.target.checked)} />
+                        <span className="slider" />
+                      </label>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-[10px] text-gray-400 shrink-0">Mode</span>
+                    <select value={autoDirectorMode} onChange={(e) => setAutoDirectorMode(e.target.value as any)}
+                      className="flex-1 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1.5 text-[10px] text-white outline-none focus:border-aether-500">
+                      <option value="sequential">Sequential</option>
+                      <option value="random">Random</option>
+                      <option value="audio_reactive">Audio Reactive</option>
+                    </select>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-gray-400">Interval (sec)</span>
-                    <input
-                      type="number"
-                      value={autoDirectorInterval}
-                      onChange={(e) => setAutoDirectorInterval(Number(e.target.value) || 12)}
-                      className="w-16 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                    />
+                    <span className="text-[10px] text-gray-400 shrink-0">Interval</span>
+                    <input type="number" value={autoDirectorInterval} onChange={(e) => setAutoDirectorInterval(Number(e.target.value) || 12)} min={3}
+                      className="w-16 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1.5 text-[10px] text-white outline-none focus:border-aether-500" />
+                    <span className="text-[10px] text-gray-500">sec</span>
                   </div>
                 </CollapsibleSection>
 
+                {/* ─── LOWER THIRDS ─── */}
                 <CollapsibleSection
-                  title="Lower Thirds"
-                  subtitle="Name + title overlays"
+                  title="📛 Lower Thirds"
+                  subtitle={lowerThirdVisible ? 'Showing' : 'Hidden'}
                   open={inputsSection === 'lower-thirds'}
                   onToggle={(open) => setInputsSection(open ? 'lower-thirds' : '')}
                 >
-                  <input
-                    value={lowerThirdName}
-                    onChange={(e) => setLowerThirdName(e.target.value)}
-                    className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                    placeholder="Name"
-                  />
-                  <input
-                    value={lowerThirdTitle}
-                    onChange={(e) => setLowerThirdTitle(e.target.value)}
-                    className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                    placeholder="Title"
-                  />
-                  <div className="flex gap-2">
-                    <button onClick={() => setLowerThirdVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Show</button>
-                    <button onClick={() => setLowerThirdVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Hide</button>
-                    <button onClick={() => showLowerThirdTemporarily(5000)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Show 5s</button>
+                  <div className="space-y-2 mb-3">
+                    <input value={lowerThirdName} onChange={(e) => setLowerThirdName(e.target.value)} className="section-input" placeholder="Speaker Name" />
+                    <input value={lowerThirdTitle} onChange={(e) => setLowerThirdTitle(e.target.value)} className="section-input" placeholder="Title / Role" />
+                  </div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <label className="aether-toggle">
+                      <input type="checkbox" checked={lowerThirdVisible} onChange={(e) => setLowerThirdVisibility(e.target.checked)} />
+                      <span className="slider" />
+                    </label>
+                    <span className="text-[10px] text-gray-400">{lowerThirdVisible ? 'Visible' : 'Hidden'}</span>
+                    <div className="flex-1" />
+                    <button onClick={() => showLowerThirdTemporarily(lowerThirdDuration * 1000)} className="section-btn section-btn-ghost">Show {lowerThirdDuration}s</button>
+                  </div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-[10px] text-gray-400">Duration</span>
+                    <div className="flex gap-1">
+                      {[5, 8, 10, 15].map(d => (
+                        <button key={d} onClick={() => setLowerThirdDuration(d)} className={`px-2 py-0.5 text-[9px] rounded-full border transition-all ${lowerThirdDuration === d ? 'border-aether-500 bg-aether-700 text-white' : 'border-aether-700 text-gray-500 hover:text-gray-300'}`}>{d}s</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-[10px] text-gray-400">Accent</span>
+                    <input type="color" value={lowerThirdAccentColor} onChange={(e) => setLowerThirdAccentColor(e.target.value)}
+                      className="w-6 h-6 rounded-md border border-aether-700 cursor-pointer bg-transparent" />
+                    <span className="text-[9px] text-gray-500 font-mono">{lowerThirdAccentColor}</span>
+                  </div>
+                  {/* Presets */}
+                  <div className="border-t border-aether-700/50 pt-2">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] text-gray-400 font-medium">Presets</span>
+                      <button onClick={() => {
+                        setLowerThirdPresets(prev => [...prev, { id: Date.now().toString(), name: lowerThirdName, title: lowerThirdTitle }]);
+                      }} className="section-btn section-btn-ghost text-[9px]">+ Save Current</button>
+                    </div>
+                    {lowerThirdPresets.length === 0 && <div className="text-[9px] text-gray-600">No presets saved</div>}
+                    {lowerThirdPresets.map(p => (
+                      <div key={p.id} className="flex items-center gap-1.5 py-1 group">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[10px] text-gray-300 truncate">{p.name}</div>
+                          <div className="text-[9px] text-gray-500 truncate">{p.title}</div>
+                        </div>
+                        <button onClick={() => { setLowerThirdName(p.name); setLowerThirdTitle(p.title); }} className="section-btn section-btn-ghost text-[9px] opacity-60 group-hover:opacity-100">Load</button>
+                        <button onClick={() => setLowerThirdPresets(prev => prev.filter(x => x.id !== p.id))} className="section-btn section-btn-danger text-[9px] opacity-60 group-hover:opacity-100">✕</button>
+                      </div>
+                    ))}
                   </div>
                 </CollapsibleSection>
 
+                {/* ─── TRANSITIONS ─── */}
                 <CollapsibleSection
-                  title="Transitions"
-                  subtitle="Cut or fade between scenes"
+                  title="✂️ Transitions"
+                  subtitle={`${transitionMode === 'cut' ? 'Cut' : transitionMode === 'fade' ? 'Fade' : 'Dip White'} · ${transitionMs}ms`}
                   open={inputsSection === 'transitions'}
                   onToggle={(open) => setInputsSection(open ? 'transitions' : '')}
                 >
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={transitionMode}
-                      onChange={(e) => setTransitionMode(e.target.value as any)}
-                      className="bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                    >
-                      <option value="cut">Cut</option>
-                      <option value="fade">Fade</option>
+                  <div className="flex items-center gap-2 mb-3">
+                    <select value={transitionMode} onChange={(e) => setTransitionMode(e.target.value as any)}
+                      className="flex-1 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1.5 text-[10px] text-white outline-none focus:border-aether-500">
+                      <option value="cut">Cut (Instant)</option>
+                      <option value="fade">Fade to Black</option>
+                      <option value="dip_white">Dip to White</option>
                     </select>
-                    <input
-                      type="number"
-                      value={transitionMs}
-                      onChange={(e) => setTransitionMs(Number(e.target.value) || 300)}
-                      className="w-16 bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                    />
-                    <span className="text-[10px] text-gray-400">ms</span>
                   </div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-[10px] text-gray-400">Speed</span>
+                    <div className="flex gap-1">
+                      {[{ label: 'Fast', ms: 150 }, { label: 'Medium', ms: 300 }, { label: 'Slow', ms: 600 }].map(d => (
+                        <button key={d.ms} onClick={() => setTransitionMs(d.ms)} className={`px-2 py-0.5 text-[9px] rounded-full border transition-all ${transitionMs === d.ms ? 'border-aether-500 bg-aether-700 text-white' : 'border-aether-700 text-gray-500 hover:text-gray-300'}`}>{d.label}</button>
+                      ))}
+                    </div>
+                    <input type="number" value={transitionMs} onChange={(e) => setTransitionMs(Number(e.target.value) || 300)}
+                      className="w-14 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1 text-[10px] text-white text-center outline-none" />
+                    <span className="text-[9px] text-gray-500">ms</span>
+                  </div>
+                  <button onClick={() => runTransition(() => { })} className="section-btn section-btn-ghost w-full">Preview Transition</button>
                 </CollapsibleSection>
 
+                {/* ─── SCENE PRESETS ─── */}
                 <CollapsibleSection
-                  title="Scene Presets"
-                  subtitle="Save and recall layouts"
+                  title="💾 Scene Presets"
+                  subtitle={`${scenePresets.length} saved`}
                   open={inputsSection === 'scene-presets'}
                   onToggle={(open) => setInputsSection(open ? 'scene-presets' : '')}
                 >
-                  <div className="space-y-2">
-                    <input
-                      value={presetName}
-                      onChange={(e) => setPresetName(e.target.value)}
-                      className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                      placeholder="Preset name"
-                    />
-                    <div className="grid grid-cols-[1fr_auto] gap-2">
-                      <select
-                        value={layoutTemplate}
-                        onChange={(e) => setLayoutTemplate(e.target.value as any)}
-                        className="bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                      >
-                        <option value="main_thumbs">Main + Thumbs</option>
-                        <option value="grid_2x2">2x2 Grid</option>
-                        <option value="freeform">Freeform</option>
+                  <div className="space-y-2 mb-3">
+                    <input value={presetName} onChange={(e) => setPresetName(e.target.value)} className="section-input" placeholder="Preset name" />
+                    <div className="flex gap-2">
+                      <select value={layoutTemplate} onChange={(e) => setLayoutTemplate(e.target.value as any)}
+                        className="flex-1 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1.5 text-[10px] text-white outline-none">
+                        <option value="main_thumbs">▣ Main + Thumbs</option>
+                        <option value="side_by_side">◫ Side by Side</option>
+                        <option value="pip_corner">◲ PiP Corner</option>
+                        <option value="grid_2x2">⊞ 2x2 Grid</option>
+                        <option value="freeform">◇ Freeform</option>
                       </select>
-                      <button onClick={saveScenePreset} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Save</button>
+                      <button onClick={saveScenePreset} className="section-btn section-btn-primary">Save</button>
                     </div>
                   </div>
-                  {scenePresets.length === 0 && (
-                    <div className="text-[10px] text-gray-500">No presets yet.</div>
-                  )}
+                  {scenePresets.length === 0 && <div className="text-[9px] text-gray-600">No presets saved yet.</div>}
                   {scenePresets.map(p => (
-                    <div key={p.id} className="flex items-center gap-2">
-                      <div className="flex-1 text-[10px] text-gray-300">{p.name} <span className="text-gray-500">({p.layout})</span></div>
-                      <button onClick={() => loadScenePresetById(p.id)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Load</button>
-                      <button onClick={() => deleteScenePreset(p.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Delete</button>
+                    <div key={p.id} className="flex items-center gap-2 py-1.5 group border-b border-aether-700/30 last:border-0">
+                      <span className="text-sm">{p.layout === 'main_thumbs' ? '▣' : p.layout === 'side_by_side' ? '◫' : p.layout === 'pip_corner' ? '◲' : p.layout === 'grid_2x2' ? '⊞' : '◇'}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[10px] text-gray-300 truncate">{p.name}</div>
+                        <div className="text-[9px] text-gray-500">{p.layout.replace('_', ' ')}</div>
+                      </div>
+                      <button onClick={() => runTransition(() => loadScenePresetById(p.id))} className="section-btn section-btn-ghost text-[9px] opacity-60 group-hover:opacity-100">Load</button>
+                      <button onClick={() => {
+                        const dup = { ...p, id: Date.now().toString(), name: p.name + ' Copy' };
+                        setScenePresets(prev => [...prev, dup]);
+                      }} className="section-btn section-btn-ghost text-[9px] opacity-60 group-hover:opacity-100">Dup</button>
+                      <button onClick={() => deleteScenePreset(p.id)} className="section-btn section-btn-danger text-[9px] opacity-60 group-hover:opacity-100">✕</button>
                     </div>
                   ))}
                 </CollapsibleSection>
 
+                {/* ─── AUDIENCE STUDIO ─── */}
                 <CollapsibleSection
-                  title="Audience Studio"
-                  subtitle="Pinned + ticker messages"
+                  title="👥 Audience Studio"
+                  subtitle={`${audienceMessages.length} messages queued`}
                   open={inputsSection === 'audience'}
                   onToggle={(open) => setInputsSection(open ? 'audience' : '')}
                 >
-                  <input
-                    value={pinnedMessage}
-                    onChange={(e) => setPinnedMessage(e.target.value)}
-                    className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                    placeholder="Pinned message"
-                  />
-                  <div className="flex gap-2">
-                    <button onClick={() => setPinnedVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Show Pin</button>
-                    <button onClick={() => setPinnedVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Hide Pin</button>
+                  {/* Pinned message */}
+                  <input value={pinnedMessage} onChange={(e) => setPinnedMessage(e.target.value)} className="section-input mb-2" placeholder="Pinned message" />
+                  <div className="flex gap-1.5 mb-3">
+                    <label className="aether-toggle">
+                      <input type="checkbox" checked={pinnedVisible} onChange={(e) => setPinnedVisibility(e.target.checked)} />
+                      <span className="slider" />
+                    </label>
+                    <span className="text-[10px] text-gray-400">{pinnedVisible ? 'Pin Visible' : 'Pin Hidden'}</span>
                   </div>
-                  <input
-                    value={tickerMessage}
-                    onChange={(e) => setTickerMessage(e.target.value)}
-                    className="w-full bg-aether-800 border border-aether-700 rounded px-2 py-1 text-[10px] text-white"
-                    placeholder="Ticker message"
-                  />
-                  <div className="flex gap-2">
-                    <button onClick={() => setTickerVisibility(true)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Start Ticker</button>
-                    <button onClick={() => setTickerVisibility(false)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Stop Ticker</button>
+                  {/* Ticker */}
+                  <input value={tickerMessage} onChange={(e) => setTickerMessage(e.target.value)} className="section-input mb-2" placeholder="Ticker message" />
+                  <div className="flex gap-1.5 mb-3">
+                    <label className="aether-toggle">
+                      <input type="checkbox" checked={tickerVisible} onChange={(e) => setTickerVisibility(e.target.checked)} />
+                      <span className="slider" />
+                    </label>
+                    <span className="text-[10px] text-gray-400">{tickerVisible ? 'Ticker Running' : 'Ticker Off'}</span>
+                  </div>
+                  {/* Message Queue */}
+                  <div className="border-t border-aether-700/50 pt-2">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] text-gray-400 font-medium">Message Queue</span>
+                      <div className="flex items-center gap-1.5">
+                        <label className="aether-toggle" style={{ width: '28px', height: '16px' }}>
+                          <input type="checkbox" checked={audienceRotateOn} onChange={(e) => setAudienceRotateOn(e.target.checked)} />
+                          <span className="slider" />
+                        </label>
+                        <span className="text-[9px] text-gray-500">Auto-rotate</span>
+                        {audienceRotateOn && (
+                          <input type="number" value={audienceRotateInterval} onChange={(e) => setAudienceRotateInterval(Number(e.target.value) || 8)} min={3}
+                            className="w-10 bg-[#110b20] border border-[#2e2650] rounded px-1 py-0.5 text-[9px] text-white text-center" />
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex gap-1.5 mb-2">
+                      <input value={audienceNewMsg} onChange={(e) => setAudienceNewMsg(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && audienceNewMsg.trim()) { setAudienceMessages(prev => [...prev, audienceNewMsg.trim()]); setAudienceNewMsg(''); } }}
+                        className="flex-1 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1 text-[10px] text-white outline-none" placeholder="Add message..." />
+                      <button onClick={() => { if (audienceNewMsg.trim()) { setAudienceMessages(prev => [...prev, audienceNewMsg.trim()]); setAudienceNewMsg(''); } }} className="section-btn section-btn-ghost">+</button>
+                    </div>
+                    {audienceMessages.map((msg, i) => (
+                      <div key={i} className={`flex items-center gap-1.5 py-1 group ${i === audienceCurrentIdx && audienceRotateOn ? 'bg-aether-700/20 rounded px-1' : ''}`}>
+                        <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: i === audienceCurrentIdx && audienceRotateOn ? '#4ade80' : '#3b3660' }} />
+                        <span className="flex-1 text-[10px] text-gray-300 truncate">{msg}</span>
+                        <button onClick={() => { setPinnedMessage(msg); setPinnedVisibility(true); }} className="text-[9px] text-gray-500 hover:text-gray-300 opacity-0 group-hover:opacity-100">Pin</button>
+                        <button onClick={() => setAudienceMessages(prev => prev.filter((_, j) => j !== i))} className="text-[9px] text-red-400 opacity-0 group-hover:opacity-100">✕</button>
+                      </div>
+                    ))}
                   </div>
                 </CollapsibleSection>
 
-                {cameraSources.length === 0 && (
-                  <div className="text-xs text-gray-500 border border-aether-700 rounded p-3 bg-aether-800/40">
-                    No camera inputs yet. Add a local or phone camera.
-                  </div>
-                )}
-
-                {cameraSources.map(src => (
-                  <div key={src.id} className="flex items-center gap-3 bg-aether-800/50 border border-aether-700 rounded-lg p-2">
-                    <SourcePreview stream={src.stream} />
-                    <div className="flex-1">
-                      <input
-                        value={src.label}
-                        onChange={(e) => updateSourceLabel(src.id, e.target.value)}
-                        className="w-full bg-transparent text-sm text-white outline-none border-b border-transparent focus:border-aether-500"
-                      />
-                      <div className="text-[10px] text-gray-500">{src.kind === 'local' ? 'Local Camera' : 'Phone Camera'} • {src.status}</div>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <button onClick={() => makeMain(src.layerId)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Make Main</button>
-                      {src.audioTrackId && (
-                        <button onClick={() => setSourceAudioActive(src.id)} className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200">Use Audio</button>
-                      )}
-                      <button onClick={() => removeSource(src.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Remove</button>
-                    </div>
-                  </div>
-                ))}
-
+                {/* ─── PHONE SLOTS ─── */}
                 <div className="pt-2">
-                  <h4 className="text-xs font-bold text-gray-300 mb-2">Phone Slots ({phoneSourceCount}/{MAX_PHONE_CAMS})</h4>
+                  <h4 className="text-xs font-bold text-gray-300 mb-2 flex items-center gap-2">
+                    📱 Phone Slots
+                    <span className={`status-badge ${phoneSlotsFull ? 'status-error' : 'status-pending'}`}>{phoneSourceCount}/{MAX_PHONE_CAMS}</span>
+                  </h4>
                   {phoneSourceCount === 0 && (
-                    <div className="text-[10px] text-gray-500 border border-aether-700 rounded p-2 bg-aether-800/30">
-                      No phone slots created yet.
-                    </div>
+                    <div className="text-[10px] text-gray-500 border border-dashed border-aether-700 rounded-lg p-3 text-center">No phone slots. Click <strong>+ Phone</strong> above.</div>
                   )}
                   {phoneSlotsFull && (
-                    <div className="text-[10px] text-amber-300 border border-amber-500/40 rounded p-2 bg-amber-500/10 mb-2">
-                      Phone slot limit reached. Remove one slot to add another.
-                    </div>
+                    <div className="text-[10px] text-amber-300 border border-amber-500/40 rounded-lg p-2 bg-amber-500/10 mb-2 flex items-center gap-1"><AlertTriangle size={10} /> Limit reached</div>
                   )}
-                  {cameraSources.filter(s => s.kind === 'phone').map(src => (
-                    <div key={`phone-${src.id}`} className="flex items-center gap-2 border border-aether-700 rounded p-2 bg-aether-800/30 mb-2">
-                      <div className="flex-1">
-                        <div className="text-xs text-white">{src.label}</div>
-                        <div className="text-[10px] text-gray-500">Status: {src.status}</div>
+                  {cameraSources.filter(s => s.kind === 'phone').map((src) => {
+                    // Track connection time
+                    if (src.status === 'live' && !phoneConnectedAtRef.current.has(src.id)) {
+                      phoneConnectedAtRef.current.set(src.id, Date.now());
+                    } else if (src.status !== 'live') {
+                      phoneConnectedAtRef.current.delete(src.id);
+                    }
+                    const connectedAt = phoneConnectedAtRef.current.get(src.id);
+                    const connSec = connectedAt ? Math.floor((Date.now() - connectedAt) / 1000) : 0;
+                    const connMin = Math.floor(connSec / 60);
+                    return (
+                      <div key={`phone-${src.id}`} className="flex items-center gap-2 border border-aether-700/60 rounded-lg p-2.5 bg-gradient-to-r from-aether-800/40 to-transparent mb-2 hover:border-aether-600 transition-colors">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs text-white truncate">{src.label}</div>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <span className={`status-badge ${src.status === 'live' ? 'status-live' : src.status === 'pending' ? 'status-pending' : 'status-error'}`}>
+                              <span className="w-1.5 h-1.5 rounded-full" style={{ background: src.status === 'live' ? '#4ade80' : src.status === 'pending' ? '#fbbf24' : '#f87171' }} />
+                              {src.status}
+                            </span>
+                            {connectedAt && <span className="text-[9px] text-gray-500">{connMin > 0 ? `${connMin}m ${connSec % 60}s` : `${connSec}s`}</span>}
+                          </div>
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                          {src.status !== 'live' && <button onClick={() => openPhoneQr(src.id)} className="section-btn section-btn-ghost">QR</button>}
+                          <button onClick={() => { const link = buildMobileUrl(src.id, src.label); if (link) navigator.clipboard?.writeText(link).catch(() => { }); }} className="section-btn section-btn-ghost">Link</button>
+                          <button onClick={() => makeMain(src.layerId)} className="section-btn section-btn-primary">Main</button>
+                          <button onClick={() => removeSource(src.id)} className="section-btn section-btn-danger">✕</button>
+                        </div>
                       </div>
-                      {src.status !== 'live' && (
-                        <button onClick={() => openPhoneQr(src.id)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Show QR</button>
-                      )}
-                      <button
-                        onClick={() => {
-                          const link = buildMobileUrl(src.id, src.label);
-                          if (link) {
-                            navigator.clipboard?.writeText(link).catch(() => { });
-                          }
-                        }}
-                        className="px-2 py-1 text-[10px] rounded bg-aether-800 border border-aether-700 text-gray-200"
-                      >
-                        Copy Link
-                      </button>
-                      <button onClick={() => makeMain(src.layerId)} className="px-2 py-1 text-[10px] rounded bg-aether-700 text-white">Make Main</button>
-                      <button onClick={() => removeSource(src.id)} className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-300">Remove</button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}

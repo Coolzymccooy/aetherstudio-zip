@@ -9,7 +9,7 @@ interface CanvasStageProps {
   onUpdateLayer: (id: string, updates: Partial<Layer>) => void;
   onCanvasReady: (canvas: HTMLCanvasElement) => void;
   isPro: boolean;
-  transitionOverlay?: { alpha: number; color: string };
+  transitionOverlay?: { alpha: number; color: string; type?: 'black' | 'white' };
 }
 
 export const CanvasStage: React.FC<CanvasStageProps> = ({
@@ -35,6 +35,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
   // State for animations (like text scrolling)
   const scrollOffsetsRef = useRef<Map<string, number>>(new Map());
+  // Slide-in animation progress per layer (0 = off-screen left, 1 = at target position)
+  const slideAnimRef = useRef<Map<string, number>>(new Map());
 
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
@@ -360,29 +362,87 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
         const family = style.fontFamily || 'Inter';
         const weight = style.fontWeight || 'normal';
         const color = style.color || '#ffffff';
+        const content = layer.content || '';
+        const pad = style.bgPadding ?? 0;
+
+        // --- Slide-in animation ---
+        let slideOffsetX = 0;
+        if (style.slideIn) {
+          let progress = slideAnimRef.current.get(layer.id) ?? 0;
+          if (layer.visible) {
+            // Animate in: ease-out from 0 → 1
+            progress = Math.min(1, progress + (style.slideSpeed ?? 60) / 1000);
+          } else {
+            // Animate out
+            progress = Math.max(0, progress - (style.slideSpeed ?? 60) / 1000);
+          }
+          slideAnimRef.current.set(layer.id, progress);
+          // Ease-out cubic
+          const eased = 1 - Math.pow(1 - progress, 3);
+          slideOffsetX = -(1 - eased) * (width + pad * 2 + 80);
+        } else if (layer.visible) {
+          slideAnimRef.current.set(layer.id, 1);
+        }
+
+        const drawX = layer.x + slideOffsetX;
+        const drawY = layer.y;
+
+        // --- Background box ---
+        if (style.bgColor) {
+          const boxX = drawX - pad;
+          const boxY = drawY - pad;
+          const boxW = width + pad * 2;
+          const boxH = height + pad * 2;
+          ctx.fillStyle = style.bgColor;
+          if (style.bgRounding) {
+            ctx.beginPath();
+            ctx.roundRect(boxX, boxY, boxW, boxH, style.bgRounding);
+            ctx.fill();
+          } else {
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+          }
+
+          // --- Accent bar (left edge) ---
+          if (style.accentColor) {
+            const barW = style.accentWidth ?? 4;
+            ctx.fillStyle = style.accentColor;
+            if (style.bgRounding) {
+              ctx.beginPath();
+              ctx.roundRect(boxX, boxY, barW, boxH, [style.bgRounding, 0, 0, style.bgRounding]);
+              ctx.fill();
+            } else {
+              ctx.fillRect(boxX, boxY, barW, boxH);
+            }
+          }
+        }
 
         ctx.font = `${weight} ${finalSize}px "${family}"`;
         ctx.fillStyle = color;
         ctx.shadowColor = 'rgba(0,0,0,0.8)';
         ctx.shadowBlur = 4;
 
-        const content = layer.content || '';
-
         if (style.scrolling) {
+          // --- Scrolling ticker ---
+          // Draw subtle gradient background strip for ticker
+          if (!style.bgColor) {
+            ctx.fillStyle = 'rgba(0,0,0,0.55)';
+            ctx.fillRect(layer.x, layer.y, width, height);
+          }
           ctx.beginPath();
           ctx.rect(layer.x, layer.y, width, height);
           ctx.clip();
+          ctx.fillStyle = color;
           const speed = style.scrollSpeed || 2;
           let offset = scrollOffsetsRef.current.get(layer.id) || 0;
           offset += speed;
           const textMetrics = ctx.measureText(content);
-          let drawX = layer.x + width - offset;
-          if (drawX + textMetrics.width < layer.x) offset = 0;
+          let textX = layer.x + width - offset;
+          if (textX + textMetrics.width < layer.x) offset = 0;
           scrollOffsetsRef.current.set(layer.id, offset);
           ctx.textBaseline = 'middle';
-          ctx.fillText(content, drawX, layer.y + height / 2);
+          ctx.fillText(content, textX, layer.y + height / 2);
         } else {
-          ctx.fillText(content, layer.x, layer.y + finalSize);
+          ctx.fillText(content, drawX, drawY + finalSize);
         }
       }
 
