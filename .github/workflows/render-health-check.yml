@@ -1,12 +1,13 @@
 name: Render Health Check
 
 on:
+  push:
+    branches:
+      - main
+      - master
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
-  workflow_run:
-    workflows: ["Vercel Deploy"]
-    types: [completed]
 
 jobs:
   health:

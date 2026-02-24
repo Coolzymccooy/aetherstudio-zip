@@ -344,3 +344,11 @@ If you want me to continue with **Stripe integration** or **mobile layout upgrad
 ### Operational note
 - `desktop:publish` now targets NSIS publish path and is stable with current artifact name format.
 - If secrets rotate, update GitHub Actions secrets before rerunning workflows.
+
+### CI follow-up (same day)
+- First workflow run after push showed:
+  - `Vercel Deploy`: failed at `actions/setup-node` step.
+  - `Render Health Check`: created failed runs with no jobs.
+- Hardening changes applied:
+  - `vercel-deploy.yml`: switched setup-node to `node-version: 20.x` and removed npm cache coupling.
+  - `render-health-check.yml`: simplified triggers to `push` (`main`/`master`) + `schedule` + `workflow_dispatch` for deterministic execution.
