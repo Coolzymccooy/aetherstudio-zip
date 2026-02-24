@@ -2169,17 +2169,18 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
   const makeMain = (layerId?: string) => {
     if (!layerId) return;
-    const action = () => {
-      setLayers(prev => {
-        const maxZ = prev.reduce((m, l) => Math.max(m, l.zIndex), 0) + 1;
-        return prev.map(l => l.id === layerId ? { ...l, x: 0, y: 0, width: 1920, height: 1080, zIndex: maxZ, visible: true } : l);
-      });
-      setSelectedLayerId(layerId);
-      if (composerMode) {
-        setTimeout(() => applyComposerLayout(layerId), 0);
-      }
-    };
-    runTransition(action);
+    // Skip runTransition to avoid fade-to-black effect that causes camera blackout
+    setLayers(prev => {
+      const maxZ = prev.reduce((m, l) => Math.max(m, l.zIndex), 0) + 1;
+      return prev.map(l => l.id === layerId
+        ? { ...l, x: 0, y: 0, width: 1920, height: 1080, zIndex: maxZ, visible: true }
+        : { ...l, visible: l.visible ?? true }
+      );
+    });
+    setSelectedLayerId(layerId);
+    if (composerMode) {
+      setTimeout(() => applyComposerLayout(layerId), 0);
+    }
   };
 
   const ensureLowerThirdLayers = () => {
@@ -2738,7 +2739,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
           <SourceButton icon={<HelpCircle size={24} />} label="Help" onClick={() => setShowHelpModal(true)} />
         </aside>
         <main className="flex-1 min-h-0 flex flex-col relative bg-aether-900/80 overflow-hidden">
-          <div className="flex-1 p-4 md:p-8 flex items-center justify-center">
+          <div className="flex-1 min-h-0 p-4 md:p-8 flex items-center justify-center">
             <CanvasStage
               layers={layers}
               onCanvasReady={handleCanvasReady}
@@ -2761,7 +2762,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             <button onClick={() => setRightPanelTab('inputs')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'inputs' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Camera size={14} /> Inputs</button>
             <button onClick={() => setRightPanelTab('ai')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'ai' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Sparkles size={14} /> AI Studio</button>
           </div>
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-y-auto">
             {rightPanelTab === 'properties' && (
               <LayerProperties layer={layers.find(l => l.id === selectedLayerId) || null} onUpdate={updateLayer} onDelete={deleteLayer} isPro={isPro} />
             )}
