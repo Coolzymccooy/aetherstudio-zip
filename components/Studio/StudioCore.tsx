@@ -104,10 +104,10 @@ const CollapsibleSection: React.FC<{
   >
     <summary className="cursor-pointer list-none px-3 py-2 flex items-center justify-between">
       <div>
-        <div className="text-xs font-semibold text-white">{title}</div>
-        {subtitle && <div className="text-[10px] text-gray-500">{subtitle}</div>}
+        <div className="text-[13px] font-semibold text-white">{title}</div>
+        {subtitle && <div className="text-xs text-gray-300">{subtitle}</div>}
       </div>
-      <div className="text-[10px] text-gray-400">Toggle</div>
+      <div className="text-xs text-gray-400">Toggle</div>
     </summary>
     <div className="px-3 pb-3 pt-1 space-y-2">
       {children}
@@ -2872,6 +2872,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             tracks={audioTracks}
             onUpdateTrack={updateAudioTrack}
             onOpenSettings={openMicPicker}
+            audioContext={audioContext.current}
+            isLive={streamStatus === StreamStatus.LIVE}
           />
         </main>
         <div className="w-full md:w-80 md:border-l border-aether-700 bg-aether-900 flex flex-col min-h-0">
@@ -2893,13 +2895,13 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                 {/* ── Toggle Switch Helper ── */}
                 {/* Inline CSS for custom toggle switches */}
                 <style>{`
-                  .aether-toggle { position: relative; display: inline-flex; width: 40px; height: 22px; cursor: pointer; }
+                  .aether-toggle { position: relative; display: inline-flex; width: 44px; height: 24px; cursor: pointer; }
                   .aether-toggle input { opacity: 0; width: 0; height: 0; }
                   .aether-toggle .slider { position: absolute; inset: 0; background: #1e1b2e; border: 1px solid #3b3660; border-radius: 999px; transition: all .25s ease; }
-                  .aether-toggle .slider::before { content: ''; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #6b7280; transition: all .25s ease; }
+                  .aether-toggle .slider::before { content: ''; position: absolute; left: 2px; top: 2px; width: 18px; height: 18px; border-radius: 50%; background: #6b7280; transition: all .25s ease; }
                   .aether-toggle input:checked + .slider { background: #7c3aed; border-color: #8b5cf6; }
-                  .aether-toggle input:checked + .slider::before { transform: translateX(18px); background: #ffffff; }
-                  .section-btn { padding: 5px 12px; font-size: 11px; border-radius: 6px; font-weight: 600; transition: all .15s ease; }
+                  .aether-toggle input:checked + .slider::before { transform: translateX(20px); background: #ffffff; }
+                  .section-btn { padding: 6px 14px; font-size: 12px; border-radius: 6px; font-weight: 600; transition: all .15s ease; }
                   .section-btn:active { transform: scale(0.95); }
                   .section-btn-primary { background: linear-gradient(135deg, #7c3aed, #6d28d9); color: white; }
                   .section-btn-primary:hover { background: linear-gradient(135deg, #8b5cf6, #7c3aed); }
@@ -2907,9 +2909,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   .section-btn-danger:hover { background: rgba(239,68,68,0.25); }
                   .section-btn-ghost { background: rgba(139,92,246,0.1); color: #c4b5fd; border: 1px solid rgba(139,92,246,0.25); }
                   .section-btn-ghost:hover { background: rgba(139,92,246,0.2); }
-                  .section-input { width: 100%; background: #110b20; border: 1px solid #2e2650; border-radius: 6px; padding: 7px 12px; font-size: 12px; color: #e2e8f0; outline: none; transition: border .15s; }
+                  .section-input { width: 100%; background: #110b20; border: 1px solid #2e2650; border-radius: 6px; padding: 7px 12px; font-size: 13px; color: #e2e8f0; outline: none; transition: border .15s; }
                   .section-input:focus { border-color: #7c3aed; }
-                  .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+                  .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
                   .status-live { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); }
                   .status-pending { background: rgba(234,179,8,0.12); color: #fbbf24; border: 1px solid rgba(234,179,8,0.25); }
                   .status-error { background: rgba(239,68,68,0.12); color: #f87171; border: 1px solid rgba(239,68,68,0.25); }
@@ -2925,33 +2927,33 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   onToggle={(open) => setInputsSection(open ? 'input-manager' : '')}
                 >
                   <div className="flex items-center justify-between mb-2">
-                    <div className="text-[10px] text-gray-500">Add sources & manage live cuts</div>
+                    <div className="text-xs text-gray-400">Add sources & manage live cuts</div>
                     <div className="flex gap-1.5">
-                      <button onClick={() => setShowDeviceSelector(true)} className="section-btn section-btn-ghost flex items-center gap-1"><Camera size={10} /> Local</button>
-                      <button onClick={createPhoneSource} disabled={phoneSlotsFull} className="section-btn section-btn-ghost flex items-center gap-1"><Smartphone size={10} /> Phone</button>
+                      <button onClick={() => setShowDeviceSelector(true)} className="section-btn section-btn-ghost flex items-center gap-1"><Camera size={12} /> Local</button>
+                      <button onClick={createPhoneSource} disabled={phoneSlotsFull} className="section-btn section-btn-ghost flex items-center gap-1"><Smartphone size={12} /> Phone</button>
                     </div>
                   </div>
                   <div className="flex gap-2 mb-3">
-                    <button onClick={cutToNext} className="section-btn section-btn-primary flex items-center gap-1 flex-1 justify-center"><ChevronRight size={12} /> Cut To Next</button>
-                    <button onClick={emergencyWide} className="section-btn section-btn-danger flex items-center gap-1 flex-1 justify-center emergency-pulse"><AlertTriangle size={12} /> Emergency Wide</button>
+                    <button onClick={cutToNext} className="section-btn section-btn-primary flex items-center gap-1 flex-1 justify-center"><ChevronRight size={14} /> Cut To Next</button>
+                    <button onClick={emergencyWide} className="section-btn section-btn-danger flex items-center gap-1 flex-1 justify-center emergency-pulse"><AlertTriangle size={14} /> Emergency Wide</button>
                   </div>
 
                   {cameraSources.length === 0 && (
-                    <div className="text-[10px] text-gray-500 border border-dashed border-aether-700 rounded-lg p-3 text-center">No camera inputs yet. Add a local or phone camera.</div>
+                    <div className="text-xs text-gray-400 border border-dashed border-aether-700 rounded-lg p-3 text-center">No camera inputs yet. Add a local or phone camera.</div>
                   )}
 
                   {cameraSources.map((src, idx) => (
                     <div key={src.id} className="flex items-center gap-2.5 bg-gradient-to-r from-aether-800/60 to-aether-800/30 border border-aether-700/60 rounded-lg p-2 mb-1.5 hover:border-aether-600 transition-colors">
-                      <div className="w-6 h-6 rounded-full bg-aether-700 flex items-center justify-center text-[10px] font-bold text-aether-300 shrink-0">#{idx + 1}</div>
+                      <div className="w-6 h-6 rounded-full bg-aether-700 flex items-center justify-center text-xs font-bold text-aether-300 shrink-0">#{idx + 1}</div>
                       <SourcePreview stream={src.stream} />
                       <div className="flex-1 min-w-0">
-                        <input value={src.label} onChange={(e) => updateSourceLabel(src.id, e.target.value)} className="w-full bg-transparent text-xs text-white outline-none border-b border-transparent focus:border-aether-500 truncate" />
+                        <input value={src.label} onChange={(e) => updateSourceLabel(src.id, e.target.value)} className="w-full bg-transparent text-sm text-white outline-none border-b border-transparent focus:border-aether-500 truncate" />
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <span className={`status-badge ${src.status === 'live' ? 'status-live' : src.status === 'pending' ? 'status-pending' : 'status-error'}`}>
                             <span className="w-1.5 h-1.5 rounded-full" style={{ background: src.status === 'live' ? '#4ade80' : src.status === 'pending' ? '#fbbf24' : '#f87171' }} />
                             {src.status}
                           </span>
-                          <span className="text-[9px] text-gray-600">Press {idx + 1}</span>
+                          <span className="text-xs text-gray-400">Press {idx + 1}</span>
                         </div>
                       </div>
                       <div className="flex flex-col gap-1 shrink-0">
@@ -2971,7 +2973,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   onToggle={(open) => setInputsSection(open ? 'composer' : '')}
                 >
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-[10px] text-gray-400">Staged layout mode</span>
+                    <span className="text-xs text-gray-300">Staged layout mode</span>
                     <label className="aether-toggle">
                       <input type="checkbox" checked={composerMode} onChange={(e) => setComposerMode(e.target.checked)} />
                       <span className="slider" />
@@ -2985,7 +2987,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       { id: 'grid_2x2' as const, label: 'Grid', icon: '⊞' },
                     ].map(lt => (
                       <button key={lt.id} onClick={() => { setLayoutTemplate(lt.id); if (composerMode) setTimeout(() => applyComposerLayout(), 0); }}
-                        className={`flex flex-col items-center gap-0.5 p-2 rounded-lg border text-[10px] transition-all ${layoutTemplate === lt.id ? 'border-aether-500 bg-aether-700/40 text-white' : 'border-aether-700 bg-aether-800/30 text-gray-400 hover:border-aether-600'
+                        className={`flex flex-col items-center gap-0.5 p-2 rounded-lg border text-xs transition-all ${layoutTemplate === lt.id ? 'border-aether-500 bg-aether-700/40 text-white' : 'border-aether-700 bg-aether-800/30 text-gray-400 hover:border-aether-600'
                           }`}
                       >
                         <span className="text-lg">{lt.icon}</span>
@@ -3004,7 +3006,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   onToggle={(open) => setInputsSection(open ? 'auto-director' : '')}
                 >
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-[10px] text-gray-400">Auto-switch cameras</span>
+                    <span className="text-xs text-gray-300">Auto-switch cameras</span>
                     <div className="flex items-center gap-2">
                       {autoDirectorOn && (
                         <span className="status-badge status-live">{autoDirectorCountdown}s</span>
@@ -3016,19 +3018,19 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 mb-2">
-                    <span className="text-[10px] text-gray-400 shrink-0">Mode</span>
+                    <span className="text-xs text-gray-300 shrink-0">Mode</span>
                     <select value={autoDirectorMode} onChange={(e) => setAutoDirectorMode(e.target.value as any)}
-                      className="flex-1 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1.5 text-[10px] text-white outline-none focus:border-aether-500">
+                      className="flex-1 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1.5 text-xs text-white outline-none focus:border-aether-500">
                       <option value="sequential">Sequential</option>
                       <option value="random">Random</option>
                       <option value="audio_reactive">Audio Reactive</option>
                     </select>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-gray-400 shrink-0">Interval</span>
+                    <span className="text-xs text-gray-300 shrink-0">Interval</span>
                     <input type="number" value={autoDirectorInterval} onChange={(e) => setAutoDirectorInterval(Number(e.target.value) || 12)} min={3}
-                      className="w-16 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1.5 text-[10px] text-white outline-none focus:border-aether-500" />
-                    <span className="text-[10px] text-gray-500">sec</span>
+                      className="w-16 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1.5 text-xs text-white outline-none focus:border-aether-500" />
+                    <span className="text-xs text-gray-400">sec</span>
                   </div>
                 </CollapsibleSection>
 
@@ -3048,41 +3050,41 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       <input type="checkbox" checked={lowerThirdVisible} onChange={(e) => setLowerThirdVisibility(e.target.checked)} />
                       <span className="slider" />
                     </label>
-                    <span className="text-[10px] text-gray-400">{lowerThirdVisible ? 'Visible' : 'Hidden'}</span>
+                    <span className="text-xs text-gray-300">{lowerThirdVisible ? 'Visible' : 'Hidden'}</span>
                     <div className="flex-1" />
                     <button onClick={() => showLowerThirdTemporarily(lowerThirdDuration * 1000)} className="section-btn section-btn-ghost">Show {lowerThirdDuration}s</button>
                   </div>
                   <div className="flex items-center gap-2 mb-3">
-                    <span className="text-[10px] text-gray-400">Duration</span>
-                    <div className="flex gap-1">
+                    <span className="text-xs text-gray-300">Duration</span>
+                    <div className="flex gap-1.5">
                       {[5, 8, 10, 15].map(d => (
-                        <button key={d} onClick={() => setLowerThirdDuration(d)} className={`px-2 py-0.5 text-[9px] rounded-full border transition-all ${lowerThirdDuration === d ? 'border-aether-500 bg-aether-700 text-white' : 'border-aether-700 text-gray-500 hover:text-gray-300'}`}>{d}s</button>
+                        <button key={d} onClick={() => setLowerThirdDuration(d)} className={`px-2.5 py-1 text-xs rounded-full border transition-all ${lowerThirdDuration === d ? 'border-aether-500 bg-aether-700 text-white' : 'border-aether-700 text-gray-400 hover:text-gray-200'}`}>{d}s</button>
                       ))}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 mb-3">
-                    <span className="text-[10px] text-gray-400">Accent</span>
+                    <span className="text-xs text-gray-300">Accent</span>
                     <input type="color" value={lowerThirdAccentColor} onChange={(e) => setLowerThirdAccentColor(e.target.value)}
                       className="w-6 h-6 rounded-md border border-aether-700 cursor-pointer bg-transparent" />
-                    <span className="text-[9px] text-gray-500 font-mono">{lowerThirdAccentColor}</span>
+                    <span className="text-xs text-gray-400 font-mono">{lowerThirdAccentColor}</span>
                   </div>
                   {/* Presets */}
                   <div className="border-t border-aether-700/50 pt-2">
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[10px] text-gray-400 font-medium">Presets</span>
+                      <span className="text-xs text-gray-300 font-medium">Presets</span>
                       <button onClick={() => {
                         setLowerThirdPresets(prev => [...prev, { id: Date.now().toString(), name: lowerThirdName, title: lowerThirdTitle }]);
-                      }} className="section-btn section-btn-ghost text-[9px]">+ Save Current</button>
+                      }} className="section-btn section-btn-ghost text-xs">+ Save Current</button>
                     </div>
-                    {lowerThirdPresets.length === 0 && <div className="text-[9px] text-gray-600">No presets saved</div>}
+                    {lowerThirdPresets.length === 0 && <div className="text-xs text-gray-500">No presets saved</div>}
                     {lowerThirdPresets.map(p => (
-                      <div key={p.id} className="flex items-center gap-1.5 py-1 group">
+                      <div key={p.id} className="flex items-center gap-1.5 py-1.5 group">
                         <div className="flex-1 min-w-0">
-                          <div className="text-[10px] text-gray-300 truncate">{p.name}</div>
-                          <div className="text-[9px] text-gray-500 truncate">{p.title}</div>
+                          <div className="text-xs text-gray-200 truncate">{p.name}</div>
+                          <div className="text-xs text-gray-400 truncate">{p.title}</div>
                         </div>
-                        <button onClick={() => { setLowerThirdName(p.name); setLowerThirdTitle(p.title); }} className="section-btn section-btn-ghost text-[9px] opacity-60 group-hover:opacity-100">Load</button>
-                        <button onClick={() => setLowerThirdPresets(prev => prev.filter(x => x.id !== p.id))} className="section-btn section-btn-danger text-[9px] opacity-60 group-hover:opacity-100">✕</button>
+                        <button onClick={() => { setLowerThirdName(p.name); setLowerThirdTitle(p.title); }} className="section-btn section-btn-ghost text-xs opacity-60 group-hover:opacity-100">Load</button>
+                        <button onClick={() => setLowerThirdPresets(prev => prev.filter(x => x.id !== p.id))} className="section-btn section-btn-danger text-xs opacity-60 group-hover:opacity-100">✕</button>
                       </div>
                     ))}
                   </div>
@@ -3097,22 +3099,22 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                 >
                   <div className="flex items-center gap-2 mb-3">
                     <select value={transitionMode} onChange={(e) => setTransitionMode(e.target.value as any)}
-                      className="flex-1 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1.5 text-[10px] text-white outline-none focus:border-aether-500">
+                      className="flex-1 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1.5 text-xs text-white outline-none focus:border-aether-500">
                       <option value="cut">Cut (Instant)</option>
                       <option value="fade">Fade to Black</option>
                       <option value="dip_white">Dip to White</option>
                     </select>
                   </div>
                   <div className="flex items-center gap-2 mb-3">
-                    <span className="text-[10px] text-gray-400">Speed</span>
-                    <div className="flex gap-1">
+                    <span className="text-xs text-gray-300">Speed</span>
+                    <div className="flex gap-1.5">
                       {[{ label: 'Fast', ms: 150 }, { label: 'Medium', ms: 300 }, { label: 'Slow', ms: 600 }].map(d => (
-                        <button key={d.ms} onClick={() => setTransitionMs(d.ms)} className={`px-2 py-0.5 text-[9px] rounded-full border transition-all ${transitionMs === d.ms ? 'border-aether-500 bg-aether-700 text-white' : 'border-aether-700 text-gray-500 hover:text-gray-300'}`}>{d.label}</button>
+                        <button key={d.ms} onClick={() => setTransitionMs(d.ms)} className={`px-2.5 py-1 text-xs rounded-full border transition-all ${transitionMs === d.ms ? 'border-aether-500 bg-aether-700 text-white' : 'border-aether-700 text-gray-400 hover:text-gray-200'}`}>{d.label}</button>
                       ))}
                     </div>
                     <input type="number" value={transitionMs} onChange={(e) => setTransitionMs(Number(e.target.value) || 300)}
-                      className="w-14 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1 text-[10px] text-white text-center outline-none" />
-                    <span className="text-[9px] text-gray-500">ms</span>
+                      className="w-14 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1 text-xs text-white text-center outline-none" />
+                    <span className="text-xs text-gray-400">ms</span>
                   </div>
                   <button onClick={() => runTransition(() => { })} className="section-btn section-btn-ghost w-full">Preview Transition</button>
                 </CollapsibleSection>
@@ -3138,20 +3140,20 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       <button onClick={saveScenePreset} className="section-btn section-btn-primary">Save</button>
                     </div>
                   </div>
-                  {scenePresets.length === 0 && <div className="text-[9px] text-gray-600">No presets saved yet.</div>}
+                  {scenePresets.length === 0 && <div className="text-xs text-gray-500">No presets saved yet.</div>}
                   {scenePresets.map(p => (
                     <div key={p.id} className="flex items-center gap-2 py-1.5 group border-b border-aether-700/30 last:border-0">
-                      <span className="text-sm">{p.layout === 'main_thumbs' ? '▣' : p.layout === 'side_by_side' ? '◫' : p.layout === 'pip_corner' ? '◲' : p.layout === 'grid_2x2' ? '⊞' : '◇'}</span>
+                      <span className="text-base">{p.layout === 'main_thumbs' ? '▣' : p.layout === 'side_by_side' ? '◫' : p.layout === 'pip_corner' ? '◲' : p.layout === 'grid_2x2' ? '⊞' : '◇'}</span>
                       <div className="flex-1 min-w-0">
-                        <div className="text-[10px] text-gray-300 truncate">{p.name}</div>
-                        <div className="text-[9px] text-gray-500">{p.layout.replace('_', ' ')}</div>
+                        <div className="text-xs text-gray-200 truncate">{p.name}</div>
+                        <div className="text-xs text-gray-400">{p.layout.replace('_', ' ')}</div>
                       </div>
-                      <button onClick={() => runTransition(() => loadScenePresetById(p.id))} className="section-btn section-btn-ghost text-[9px] opacity-60 group-hover:opacity-100">Load</button>
+                      <button onClick={() => runTransition(() => loadScenePresetById(p.id))} className="section-btn section-btn-ghost text-xs opacity-60 group-hover:opacity-100">Load</button>
                       <button onClick={() => {
                         const dup = { ...p, id: Date.now().toString(), name: p.name + ' Copy' };
                         setScenePresets(prev => [...prev, dup]);
-                      }} className="section-btn section-btn-ghost text-[9px] opacity-60 group-hover:opacity-100">Dup</button>
-                      <button onClick={() => deleteScenePreset(p.id)} className="section-btn section-btn-danger text-[9px] opacity-60 group-hover:opacity-100">✕</button>
+                      }} className="section-btn section-btn-ghost text-xs opacity-60 group-hover:opacity-100">Dup</button>
+                      <button onClick={() => deleteScenePreset(p.id)} className="section-btn section-btn-danger text-xs opacity-60 group-hover:opacity-100">✕</button>
                     </div>
                   ))}
                 </CollapsibleSection>
@@ -3170,7 +3172,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       <input type="checkbox" checked={pinnedVisible} onChange={(e) => setPinnedVisibility(e.target.checked)} />
                       <span className="slider" />
                     </label>
-                    <span className="text-[10px] text-gray-400">{pinnedVisible ? 'Pin Visible' : 'Pin Hidden'}</span>
+                    <span className="text-xs text-gray-300">{pinnedVisible ? 'Pin Visible' : 'Pin Hidden'}</span>
                   </div>
                   {/* Ticker */}
                   <input value={tickerMessage} onChange={(e) => setTickerMessage(e.target.value)} className="section-input mb-2" placeholder="Ticker message" />
@@ -3179,21 +3181,21 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       <input type="checkbox" checked={tickerVisible} onChange={(e) => setTickerVisibility(e.target.checked)} />
                       <span className="slider" />
                     </label>
-                    <span className="text-[10px] text-gray-400">{tickerVisible ? 'Ticker Running' : 'Ticker Off'}</span>
+                    <span className="text-xs text-gray-300">{tickerVisible ? 'Ticker Running' : 'Ticker Off'}</span>
                   </div>
                   {/* Message Queue */}
                   <div className="border-t border-aether-700/50 pt-2">
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[10px] text-gray-400 font-medium">Message Queue</span>
+                      <span className="text-xs text-gray-300 font-medium">Message Queue</span>
                       <div className="flex items-center gap-1.5">
-                        <label className="aether-toggle" style={{ width: '28px', height: '16px' }}>
+                        <label className="aether-toggle" style={{ width: '32px', height: '18px' }}>
                           <input type="checkbox" checked={audienceRotateOn} onChange={(e) => setAudienceRotateOn(e.target.checked)} />
                           <span className="slider" />
                         </label>
-                        <span className="text-[9px] text-gray-500">Auto-rotate</span>
+                        <span className="text-xs text-gray-400">Auto-rotate</span>
                         {audienceRotateOn && (
                           <input type="number" value={audienceRotateInterval} onChange={(e) => setAudienceRotateInterval(Number(e.target.value) || 8)} min={3}
-                            className="w-10 bg-[#110b20] border border-[#2e2650] rounded px-1 py-0.5 text-[9px] text-white text-center" />
+                            className="w-10 bg-[#110b20] border border-[#2e2650] rounded px-1 py-0.5 text-xs text-white text-center" />
                         )}
                       </div>
                     </div>
