@@ -352,3 +352,7 @@ If you want me to continue with **Stripe integration** or **mobile layout upgrad
 - Hardening changes applied:
   - `vercel-deploy.yml`: switched setup-node to `node-version: 20.x` and removed npm cache coupling.
   - Replaced `render-health-check.yml` with `render-health.yml` (fresh workflow registration), using deterministic triggers and direct endpoint checks.
+- Final status after follow-up commits:
+  - `Vercel Deploy`: passing on latest `master`.
+  - `Render Health Check`: passing on latest `master`.
+  - `Desktop Publish`: trigger is wired on tag push; requires `GH_TOKEN` secret in Actions for publish execution.
