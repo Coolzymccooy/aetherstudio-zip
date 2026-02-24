@@ -351,4 +351,4 @@ If you want me to continue with **Stripe integration** or **mobile layout upgrad
   - `Render Health Check`: created failed runs with no jobs.
 - Hardening changes applied:
   - `vercel-deploy.yml`: switched setup-node to `node-version: 20.x` and removed npm cache coupling.
-  - `render-health-check.yml`: simplified triggers to `push` (`main`/`master`) + `schedule` + `workflow_dispatch` for deterministic execution.
+  - Replaced `render-health-check.yml` with `render-health.yml` (fresh workflow registration), using deterministic triggers and direct endpoint checks.
