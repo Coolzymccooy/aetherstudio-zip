@@ -1687,9 +1687,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     streamSessionIdRef.current = sessionId;
     encoderStartAtRef.current = Date.now();
 
-    // Log telemetry - don't await to avoid blocking UI
-    logStreamStart(user.uid, user.email || 'unknown', sessionId, destinationsList, wifiMode ? 'wifi_low' : chosenQuality)
-      .then(id => { if (id) telemetryLogIdRef.current = id; });
+    // Log telemetry - deferred to ensure zero impact on initial encoding start
+    setTimeout(() => {
+      logStreamStart(user.uid, user.email || 'unknown', sessionId, destinationsList, wifiMode ? 'wifi_low' : chosenQuality)
+        .then(id => { if (id) telemetryLogIdRef.current = id; });
+    }, 100);
 
     let recorder: MediaRecorder;
     try {
