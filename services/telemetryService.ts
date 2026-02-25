@@ -3,7 +3,7 @@ import { collection, addDoc, serverTimestamp, doc, updateDoc, getDoc } from 'fir
 import { TelemetryEvent } from '../types';
 
 const TELEMETRY_COLLECTION = 'telemetry';
-const APP_VERSION = '0.1.6';
+const APP_VERSION = '0.1.7';
 
 export const logStreamStart = async (uid: string, email: string, sessionId: string, destinations: string[], quality: string) => {
     if (!firestore) return null;

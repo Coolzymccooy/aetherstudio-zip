@@ -56,6 +56,8 @@ export interface AudioTrackConfig {
   muted: boolean;
   isMic: boolean;
   noiseCancellation: boolean;
+  monitoring?: boolean;
+  deviceId?: string;
   stream?: MediaStream;
 }
 

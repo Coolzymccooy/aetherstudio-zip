@@ -206,6 +206,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     zeroSizeChunks: 0,
     firstChunkDelayMs: null,
   });
+  const [outputDeviceId, setOutputDeviceId] = useState(() => localStorage.getItem('aether_audio_output') || 'default');
+  const [masterMonitorVolume, setMasterMonitorVolume] = useState(() => Number(localStorage.getItem('aether_monitor_volume') || 80));
 
   type CameraSourceKind = 'local' | 'phone';
   type CameraSourceStatus = 'pending' | 'live' | 'failed';
@@ -348,6 +350,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const audioFilters = useRef<Map<string, BiquadFilterNode>>(new Map());
   const hyperGateNodes = useRef<Map<string, { input: GainNode; hp: BiquadFilterNode; analyser: AnalyserNode; gate: GainNode; }>>(new Map());
   const hyperGateState = useRef<Map<string, { isOpen: boolean; lastAboveMs: number; lastDb: number; }>>(new Map());
+  const masterMonitorGain = useRef<GainNode | null>(null);
+  const audioMonitoringNodes = useRef<Map<string, GainNode>>(new Map());
 
   // Connection Refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -501,7 +505,32 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     localStorage.setItem('aether_pinned_message', pinnedMessage);
     localStorage.setItem('aether_ticker_message', tickerMessage);
     localStorage.setItem('aether_audience_messages', JSON.stringify(audienceMessages));
-  }, [pinnedMessage, tickerMessage, audienceMessages]);
+    localStorage.setItem('aether_monitor_volume', String(masterMonitorVolume));
+  }, [pinnedMessage, tickerMessage, audienceMessages, masterMonitorVolume]);
+
+  useEffect(() => {
+    const handleOutputChange = (e: any) => {
+      const deviceId = e.detail?.deviceId;
+      if (deviceId) {
+        setOutputDeviceId(deviceId);
+        applySinkId(deviceId);
+      }
+    };
+    window.addEventListener('aether:audio-output-change', handleOutputChange);
+    return () => window.removeEventListener('aether:audio-output-change', handleOutputChange);
+  }, []);
+
+  const applySinkId = async (deviceId: string) => {
+    try {
+      const ctx = audioContext.current;
+      if (ctx && (ctx as any).setSinkId) {
+        await (ctx as any).setSinkId(deviceId);
+        console.log("AudioContext SinkId applied:", deviceId);
+      }
+    } catch (err) {
+      console.error("Failed to set audio sink ID", err);
+    }
+  };
 
   useEffect(() => {
     localStorage.setItem('aether_stream_destinations', JSON.stringify(destinations));
@@ -722,10 +751,23 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       audioContext.current = new AudioContextClass();
       audioDestination.current = audioContext.current.createMediaStreamDestination();
+
+      // Initialize Master Monitor
+      masterMonitorGain.current = audioContext.current.createGain();
+      masterMonitorGain.current.connect(audioContext.current.destination);
+
+      // Apply initial sinkId if supported
+      if (outputDeviceId && (audioContext.current as any).setSinkId) {
+        (audioContext.current as any).setSinkId(outputDeviceId).catch(() => { });
+      }
     }
     const ctx = audioContext.current;
     const dest = audioDestination.current;
-    if (!ctx || !dest) return;
+    const monitorMaster = masterMonitorGain.current;
+    if (!ctx || !dest || !monitorMaster) return;
+
+    // Update Master Monitor Volume
+    monitorMaster.gain.setTargetAtTime(masterMonitorVolume / 100, ctx.currentTime, 0.05);
 
     // Cleanup removed tracks
     const currentIds = new Set(audioTracks.map(t => t.id));
@@ -734,9 +776,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         audioSources.current.get(id)?.disconnect();
         audioGains.current.get(id)?.disconnect();
         audioFilters.current.get(id)?.disconnect();
+        audioMonitoringNodes.current.get(id)?.disconnect();
+
         audioSources.current.delete(id);
         audioGains.current.delete(id);
         audioFilters.current.delete(id);
+        audioMonitoringNodes.current.delete(id);
         hyperGateNodes.current.delete(id);
       }
     });
@@ -755,14 +800,23 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         // Filter & Gain
         const filter = ctx.createBiquadFilter();
         const gain = ctx.createGain();
+        const monitorGain = ctx.createGain();
 
         hg.gate.connect(filter);
         filter.connect(gain);
         gain.connect(dest);
 
+        // Monitoring path
+        gain.connect(monitorGain);
+        // We only connect monitorGain to monitorMaster if monitoring is enabled
+        if (track.monitoring) {
+          monitorGain.connect(monitorMaster);
+        }
+
         audioSources.current.set(track.id, source);
         audioGains.current.set(track.id, gain);
         audioFilters.current.set(track.id, filter);
+        audioMonitoringNodes.current.set(track.id, monitorGain);
         hyperGateNodes.current.set(track.id, hg);
       }
 
@@ -770,10 +824,19 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       if (gainNode) {
         gainNode.gain.setTargetAtTime(track.muted ? 0 : (track.volume / 100), ctx.currentTime, 0.05);
       }
+
+      const monGain = audioMonitoringNodes.current.get(track.id);
+      if (monGain) {
+        // Handle dynamic monitoring toggle
+        try { monGain.disconnect(monitorMaster); } catch { }
+        if (track.monitoring && !track.muted) {
+          monGain.connect(monitorMaster);
+        }
+      }
     });
 
     if (ctx.state === 'suspended') ctx.resume().catch(() => { });
-  }, [audioTracks]);
+  }, [audioTracks, masterMonitorVolume]);
 
   // HyperGate Processing Loop
   useEffect(() => {
@@ -2918,7 +2981,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         </div>
       )}
 
-      <header className="h-14 border-b border-aether-700 bg-aether-900/90 flex items-center justify-between px-6 z-10 backdrop-blur-md">
+      <header className="h-12 border-b border-aether-700 bg-aether-900/90 flex items-center justify-between px-4 z-10 backdrop-blur-md">
         <div className="flex items-center gap-2 cursor-pointer" onClick={onBack}>
           <div className="w-8 h-8 bg-gradient-to-br from-aether-500 to-aether-accent rounded-lg flex items-center justify-center shadow-lg">
             <Zap className="text-white fill-current" size={18} />
@@ -2974,7 +3037,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
           <button
             onClick={toggleLive}
             disabled={!canToggleLive}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${streamStatus === StreamStatus.LIVE
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all text-sm ${streamStatus === StreamStatus.LIVE
               ? 'bg-red-600 text-white'
               : canToggleLive
                 ? 'bg-aether-800 border border-aether-700 hover:bg-aether-700'
@@ -2982,7 +3045,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
               }`}
             title={!canToggleLive ? "Relay and stream key required" : undefined}
           >
-            <Radio size={18} /> {streamStatus === StreamStatus.LIVE ? 'End Stream' : 'Go Live'}
+            <Radio size={16} /> {streamStatus === StreamStatus.LIVE ? 'End' : 'Live'}
           </button>
           <button onClick={() => setShowSettings(true)} className="p-2 text-gray-400 hover:text-white hover:bg-aether-800 rounded-lg"><Settings size={20} /></button>
           <button onClick={handleSignOut} className="p-2 text-red-400 hover:text-white hover:bg-red-900/50 rounded-lg" title="Sign Out"><LogOut size={20} /></button>
@@ -2990,16 +3053,16 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       </header>
 
       <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:flex-row">
-        <aside className="w-16 hidden md:flex flex-col items-center py-6 gap-6 border-r border-aether-700 bg-aether-800/50">
-          <SourceButton icon={<Camera size={24} />} label="Camera" onClick={() => setShowDeviceSelector(true)} />
-          <SourceButton icon={<Smartphone size={24} />} label={phoneSlotsFull ? `Mobile (${MAX_PHONE_CAMS} max)` : "Mobile"} onClick={createPhoneSource} disabled={phoneSlotsFull} />
-          <SourceButton icon={<Monitor size={24} />} label="Screen" onClick={addScreenSource} />
-          <SourceButton icon={<ImageIcon size={24} />} label="Image" onClick={() => fileInputRef.current?.click()} />
-          <SourceButton icon={<Type size={24} />} label="Text" onClick={addTextLayer} />
-          <SourceButton icon={<HelpCircle size={24} />} label="Help" onClick={() => setShowHelpModal(true)} />
+        <aside className="w-14 hidden md:flex flex-col items-center py-4 gap-4 border-r border-aether-700 bg-aether-800/50">
+          <SourceButton icon={<Camera size={20} />} label="Cam" onClick={() => setShowDeviceSelector(true)} />
+          <SourceButton icon={<Smartphone size={20} />} label="Mob" onClick={createPhoneSource} disabled={phoneSlotsFull} />
+          <SourceButton icon={<Monitor size={20} />} label="Scr" onClick={addScreenSource} />
+          <SourceButton icon={<ImageIcon size={20} />} label="Img" onClick={() => fileInputRef.current?.click()} />
+          <SourceButton icon={<Type size={20} />} label="Txt" onClick={addTextLayer} />
+          <SourceButton icon={<HelpCircle size={20} />} label="Help" onClick={() => setShowHelpModal(true)} />
         </aside>
         <main className="flex-1 min-h-0 flex flex-col relative bg-aether-900/80 overflow-hidden">
-          <div className="flex-1 min-h-0 p-4 md:p-8 flex items-center justify-center">
+          <div className="flex-1 min-h-0 p-1 md:p-2 flex items-center justify-center">
             <CanvasStage
               layers={layers}
               onCanvasReady={handleCanvasReady}
@@ -3016,14 +3079,17 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             onOpenSettings={openMicPicker}
             audioContext={audioContext.current}
             isLive={streamStatus === StreamStatus.LIVE}
+            masterMonitorVolume={masterMonitorVolume}
+            onUpdateMasterMonitorVolume={setMasterMonitorVolume}
+            onOpenDeviceSettings={() => setShowDeviceSelector(true)}
           />
         </main>
-        <div className="w-full md:w-80 md:border-l border-aether-700 bg-aether-900 flex flex-col min-h-0">
+        <div className="w-full md:w-72 md:border-l border-aether-700 bg-aether-900 flex flex-col min-h-0 shrink-0">
           <div className="flex border-b border-aether-700">
-            <button onClick={() => setRightPanelTab('properties')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'properties' ? 'bg-aether-800 text-white' : 'text-gray-500'}`}><Sliders size={14} /> Properties</button>
-            <button onClick={() => setRightPanelTab('inputs')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'inputs' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Camera size={14} /> Inputs</button>
-            <button onClick={() => setRightPanelTab('ai')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'ai' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Sparkles size={14} /> AI Studio</button>
-            <button onClick={() => setRightPanelTab('ops')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'ops' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Shield size={14} /> Ops</button>
+            <button onClick={() => setRightPanelTab('properties')} className={`flex-1 py-2 text-[10px] font-bold uppercase flex items-center justify-center gap-1 ${rightPanelTab === 'properties' ? 'bg-aether-800 text-white' : 'text-gray-500'}`}><Sliders size={12} /> Prop</button>
+            <button onClick={() => setRightPanelTab('inputs')} className={`flex-1 py-2 text-[10px] font-bold uppercase flex items-center justify-center gap-1 ${rightPanelTab === 'inputs' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Camera size={12} /> In</button>
+            <button onClick={() => setRightPanelTab('ai')} className={`flex-1 py-2 text-[10px] font-bold uppercase flex items-center justify-center gap-1 ${rightPanelTab === 'ai' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Sparkles size={12} /> AI</button>
+            <button onClick={() => setRightPanelTab('ops')} className={`flex-1 py-2 text-[10px] font-bold uppercase flex items-center justify-center gap-1 ${rightPanelTab === 'ops' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Shield size={12} /> Ops</button>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto">
             {rightPanelTab === 'properties' && (
@@ -3057,7 +3123,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
               />
             )}
             {rightPanelTab === 'inputs' && (
-              <div className="h-full overflow-y-auto p-4 pb-24 space-y-3">
+              <div className="h-full overflow-y-auto p-3 pb-20 space-y-2">
 
                 {/* ── Toggle Switch Helper ── */}
                 {/* Inline CSS for custom toggle switches */}

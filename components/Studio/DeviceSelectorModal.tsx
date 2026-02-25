@@ -9,8 +9,10 @@ interface DeviceSelectorModalProps {
 export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSelect, onClose }) => {
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+  const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<string>('');
   const [selectedAudio, setSelectedAudio] = useState<string>('');
+  const [selectedOutput, setSelectedOutput] = useState<string>(() => localStorage.getItem('aether_audio_output') || 'default');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -22,7 +24,7 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
     try {
       // Request camera permission (labels show after permission)
       try {
-        const permStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const permStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         permStream.getTracks().forEach((t) => t.stop());
       } catch (err: any) {
         const name = err?.name || '';
@@ -31,26 +33,28 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
         } else if (name === 'NotAllowedError' || name === 'SecurityError') {
           setWarning('Camera permission blocked. Please allow access and retry.');
         } else {
-          setWarning('Could not access camera permissions. You can still select devices below.');
+          setWarning('Could not access device permissions. You can still select devices below.');
         }
       }
 
       const devices = await navigator.mediaDevices.enumerateDevices();
-      
+
       const video = devices.filter(d => d.kind === 'videoinput');
       const audio = devices.filter(d => d.kind === 'audioinput');
-      
+      const output = devices.filter(d => d.kind === 'audiooutput');
+
       setVideoDevices(video);
       setAudioDevices(audio);
-      
-      if (video.length > 0) setSelectedVideo(video[0].deviceId);
-      if (audio.length > 0) setSelectedAudio(audio[0].deviceId);
-      if (audio.length === 0) setSelectedAudio("");
+      setOutputDevices(output);
+
+      if (video.length > 0 && !selectedVideo) setSelectedVideo(video[0].deviceId);
+      if (audio.length > 0 && !selectedAudio) setSelectedAudio(audio[0].deviceId);
+      if (output.length > 0 && !selectedOutput) setSelectedOutput(output[0].deviceId);
 
       if (video.length === 0) {
         setError("No camera devices found.");
       }
-      
+
     } catch (err) {
       console.error("Error loading devices", err);
       setError("Could not access devices. Please allow camera permissions.");
@@ -67,6 +71,13 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
     const label =
       videoDevices.find((d) => d.deviceId === selectedVideo)?.label ||
       `Camera ${selectedVideo.slice(0, 5)}...`;
+
+    if (selectedOutput) {
+      localStorage.setItem('aether_audio_output', selectedOutput);
+      // Dispatch custom event so StudioCore can update sinkId
+      window.dispatchEvent(new CustomEvent('aether:audio-output-change', { detail: { deviceId: selectedOutput } }));
+    }
+
     onSelect(selectedVideo, selectedAudio, label);
   };
 
@@ -75,7 +86,7 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
       <div className="bg-aether-900 border border-aether-700 rounded-xl w-[480px] shadow-2xl p-6">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <Camera className="text-aether-500" size={24} /> 
+            <Camera className="text-aether-500" size={24} />
             Select Source
           </h2>
           <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
@@ -86,8 +97,8 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
         {error ? (
           <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-lg mb-4 text-sm">
             {error}
-            <button 
-              onClick={loadDevices} 
+            <button
+              onClick={loadDevices}
               className="mt-2 text-white bg-red-500/20 hover:bg-red-500/30 px-3 py-1 rounded text-xs"
             >
               Retry
@@ -96,7 +107,7 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
         ) : isLoading ? (
           <div className="flex flex-col items-center justify-center py-8 text-gray-500 gap-2">
             <Loader2 className="animate-spin" size={24} />
-            <span className="text-sm">Scanning for cameras...</span>
+            <span className="text-sm">Scanning for devices...</span>
           </div>
         ) : (
           <div className="space-y-6">
@@ -110,53 +121,73 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
               <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
                 <Camera size={14} /> Video Input
               </label>
-              <select 
+              <select
                 value={selectedVideo}
                 onChange={(e) => setSelectedVideo(e.target.value)}
                 className="w-full bg-aether-800 border border-aether-700 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-aether-500"
               >
                 {videoDevices.map(device => (
                   <option key={device.deviceId} value={device.deviceId}>
-                    {device.label || `Camera ${device.deviceId.slice(0,5)}...`}
+                    {device.label || `Camera ${device.deviceId.slice(0, 5)}...`}
                   </option>
                 ))}
               </select>
             </div>
 
             {/* Audio Selection */}
-            <div className="space-y-2">
-              <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                <Mic size={14} /> Audio Input
-              </label>
-              <select 
-                value={selectedAudio}
-                onChange={(e) => setSelectedAudio(e.target.value)}
-                className="w-full bg-aether-800 border border-aether-700 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-aether-500"
-              >
-                <option value="">No Microphone</option>
-                {audioDevices.map(device => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label || `Microphone ${device.deviceId.slice(0,5)}...`}
-                  </option>
-                ))}
-              </select>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                  <Mic size={14} /> Audio Input
+                </label>
+                <select
+                  value={selectedAudio}
+                  onChange={(e) => setSelectedAudio(e.target.value)}
+                  className="w-full bg-aether-800 border border-aether-700 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-aether-500"
+                >
+                  <option value="">No Microphone</option>
+                  {audioDevices.map(device => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label || `Mic ${device.deviceId.slice(0, 5)}...`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                  <RefreshCw size={14} /> Audio Output
+                </label>
+                <select
+                  value={selectedOutput}
+                  onChange={(e) => setSelectedOutput(e.target.value)}
+                  className="w-full bg-aether-800 border border-aether-700 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-aether-500"
+                >
+                  {outputDevices.length === 0 ? <option value="default">Default Speaker</option> : null}
+                  {outputDevices.map(device => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label || `Speaker ${device.deviceId.slice(0, 5)}...`}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-            
+
             <div className="bg-blue-500/10 border border-blue-500/20 rounded p-3 text-xs text-blue-200">
-              <span className="font-bold">Pro Tip:</span> If using your phone, ensure your Camo/DroidCam app is running first, then click Refresh.
+              <span className="font-bold">Audio Monitoring:</span> Selection here determines where you will hear the stream monitoring mix.
             </div>
           </div>
         )}
 
         <div className="flex gap-3 mt-8">
-          <button 
+          <button
             onClick={loadDevices}
             className="p-2.5 rounded-lg border border-aether-700 text-gray-400 hover:text-white hover:bg-aether-800 transition-colors"
             title="Refresh Devices"
           >
             <RefreshCw size={18} />
           </button>
-          <button 
+          <button
             onClick={handleConfirm}
             disabled={isLoading || !selectedVideo}
             className="flex-1 bg-aether-500 hover:bg-aether-600 text-white font-medium py-2.5 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"

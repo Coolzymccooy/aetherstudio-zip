@@ -8,6 +8,9 @@ interface AudioMixerProps {
   onOpenSettings: (trackId: string) => void;
   audioContext: AudioContext | null;
   isLive: boolean;
+  masterMonitorVolume: number;
+  onUpdateMasterMonitorVolume: (vol: number) => void;
+  onOpenDeviceSettings: () => void;
 }
 
 interface TrackStats {
@@ -18,7 +21,16 @@ interface TrackStats {
   quality: 'silent' | 'low' | 'optimal' | 'hot' | 'clipping';
 }
 
-export const AudioMixer: React.FC<AudioMixerProps> = ({ tracks, onUpdateTrack, onOpenSettings, audioContext, isLive }) => {
+export const AudioMixer: React.FC<AudioMixerProps> = ({
+  tracks,
+  onUpdateTrack,
+  onOpenSettings,
+  audioContext,
+  isLive,
+  masterMonitorVolume,
+  onUpdateMasterMonitorVolume,
+  onOpenDeviceSettings
+}) => {
   const [stats, setStats] = useState<Record<string, TrackStats>>({});
   const analysersRef = useRef<Map<string, AnalyserNode>>(new Map());
   const peakHoldRef = useRef<Map<string, { val: number, time: number }>>(new Map());
@@ -129,8 +141,8 @@ export const AudioMixer: React.FC<AudioMixerProps> = ({ tracks, onUpdateTrack, o
   const masterPeak = activeStats.length ? Math.max(...activeStats.map(t => t.peak)) : 0;
 
   return (
-    <div className="bg-[#0b0816] border-t border-aether-700/50 p-4 h-48 md:h-56 overflow-y-auto">
-      <div className="flex items-center justify-between mb-4">
+    <div className="bg-[#0b0816] border-t border-aether-700/50 p-1 md:p-2 h-32 md:h-36 overflow-y-auto relative">
+      <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-4">
           <h3 className="text-xs font-bold text-gray-300 uppercase tracking-widest flex items-center gap-2">
             <Activity size={16} className="text-aether-400" /> Audio Signal Center
@@ -142,102 +154,102 @@ export const AudioMixer: React.FC<AudioMixerProps> = ({ tracks, onUpdateTrack, o
         </div>
 
         <div className="flex items-center gap-6">
-          {/* Master Output Meter */}
-          <div className="flex flex-col items-end gap-1">
-            <div className="flex items-center gap-2">
-              <span className="text-[9px] text-gray-500 font-bold uppercase tracking-tighter">Master Out</span>
-              <Headphones size={13} className="text-aether-400" />
+          {/* Master Output Meter & Monitoring Control */}
+          <div className="flex items-center gap-4">
+            <div className="flex flex-col items-end gap-1">
+              <div className="flex justify-between w-full items-center">
+                <button
+                  onClick={onOpenDeviceSettings}
+                  className="text-[8px] font-bold text-aether-400 hover:text-white uppercase flex items-center gap-1"
+                >
+                  <Settings size={10} /> Output Device
+                </button>
+                <span className="text-[9px] text-gray-500 font-bold uppercase tracking-tighter ml-4">Stream Out</span>
+              </div>
+              <div className="relative w-40 h-3 bg-black/60 rounded-sm overflow-hidden border border-white/5 flex gap-[1px] p-[1px]">
+                {Array.from({ length: 20 }).map((_, i) => {
+                  const fill = (masterRMS / 100) * 20;
+                  const active = i < fill;
+                  const color = i > 17 ? 'bg-red-500' : i > 14 ? 'bg-yellow-400' : 'bg-green-500';
+                  return <div key={i} className={`flex-1 h-full rounded-[1px] transition-all duration-75 ${active ? color : 'bg-gray-900/40'}`} />;
+                })}
+                <div className="absolute top-0 h-full w-[2px] bg-white/80 transition-all duration-75" style={{ left: `${masterPeak}%` }} />
+              </div>
             </div>
-            <div className="relative w-40 h-3 bg-black/60 rounded-sm overflow-hidden border border-white/5 flex gap-[1px] p-[1px]">
-              {Array.from({ length: 20 }).map((_, i) => {
-                const fill = (masterRMS / 100) * 20;
-                const active = i < fill;
-                const color = i > 17 ? 'bg-red-500' : i > 14 ? 'bg-yellow-400' : 'bg-green-500';
-                return <div key={i} className={`flex-1 h-full rounded-[1px] transition-all duration-75 ${active ? color : 'bg-gray-900/40'}`} />;
-              })}
-              {/* Peak Tick */}
-              <div className="absolute top-0 h-full w-[2px] bg-white/80 transition-all duration-75" style={{ left: `${masterPeak}%` }} />
+
+            <div className="flex flex-col gap-1 w-24">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] text-gray-500 font-bold uppercase">Monitor</span>
+                <span className="text-[9px] text-aether-400 font-mono">{masterMonitorVolume}%</span>
+              </div>
+              <input
+                type="range" min="0" max="100" value={masterMonitorVolume}
+                onChange={(e) => onUpdateMasterMonitorVolume(parseInt(e.target.value))}
+                className="w-full h-1 bg-black rounded-lg appearance-none cursor-pointer accent-aether-500"
+              />
             </div>
           </div>
-          <div className="text-[10px] text-gray-500 font-mono bg-black/30 px-2 py-1 rounded">SSL 48kHz | 24-bit</div>
+
+          <div className="text-[10px] text-gray-500 font-mono bg-black/30 px-2 py-1 rounded hidden lg:block">SSL 48kHz | 24-bit</div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
         {tracks.map((track) => {
           const s = stats[track.id] || { rms: 0, peak: 0, peakHold: 0, voicePower: 0, quality: 'silent' };
           const isVoiceActive = s.voicePower > 15;
 
           return (
-            <div key={track.id} className="bg-aether-900/40 rounded-xl p-3 border border-aether-700/30 hover:border-aether-500/40 transition-all group">
-              <div className="flex justify-between items-start mb-2.5">
-                <div className="flex flex-col gap-0.5 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-white truncate flex items-center gap-1.5">
-                      {track.id === 'mobile-mic-track' ? <Smartphone size={12} className="text-blue-400" /> : <Mic size={12} className="text-aether-400" />}
+            <div key={track.id} className={`bg-aether-900/40 rounded-lg p-2 border transition-all group ${track.monitoring ? 'border-aether-500/60 ring-1 ring-aether-500/20' : 'border-aether-700/30'}`}>
+              <div className="flex justify-between items-center mb-1">
+                <div className="flex flex-col gap-0 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-bold text-white truncate flex items-center gap-1">
+                      {track.id === 'mobile-mic-track' ? <Smartphone size={10} className="text-blue-400" /> : <Mic size={10} className="text-aether-400" />}
                       {track.label}
                     </span>
-                    {s.quality === 'clipping' && <span className="bg-red-500 text-white text-[8px] px-1 rounded font-black animate-pulse">CLIP</span>}
+                    {s.quality === 'clipping' && <span className="bg-red-500 text-white text-[7px] px-1 rounded font-black animate-pulse">CLIP</span>}
                   </div>
-
-                  {/* Quality & Voice Indicators */}
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-tighter ${s.quality === 'optimal' ? 'text-green-400 bg-green-400/10' :
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-[8px] font-bold px-1 rounded uppercase tracking-tighter ${s.quality === 'optimal' ? 'text-green-400 bg-green-400/10' :
                       s.quality === 'hot' ? 'text-yellow-400 bg-yellow-400/10' :
                         s.quality === 'clipping' ? 'text-red-400 bg-red-400/10' :
                           'text-gray-500 bg-gray-500/10'
                       }`}>
-                      {s.quality === 'optimal' ? 'Signal: Great' : s.quality === 'hot' ? 'Signal: Hot' : s.quality === 'clipping' ? 'Distorted' : 'Signal: Low'}
+                      {s.quality === 'optimal' ? 'Great' : s.quality === 'hot' ? 'Hot' : s.quality === 'clipping' ? 'Distorted' : 'Low'}
                     </span>
-                    <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold transition-all ${isVoiceActive ? 'text-blue-400 bg-blue-400/10' : 'text-gray-600'}`}>
-                      <Zap size={8} /> {isVoiceActive ? 'SPEECH DETECTED' : 'NO VOICE'}
-                    </div>
                   </div>
                 </div>
 
-                <div className="flex gap-1 shrink-0">
-                  <button onClick={() => onUpdateTrack(track.id, { noiseCancellation: !track.noiseCancellation })}
-                    className={`p-1.5 rounded-lg border transition-all ${track.noiseCancellation ? 'bg-aether-500 border-aether-400 text-white shadow-lg' : 'bg-black/30 border-aether-700/50 text-gray-500 hover:text-gray-300'
-                      }`} title="Voice Clarity Engine">
-                    <Sparkles size={14} />
+                <div className="flex gap-0.5 shrink-0">
+                  <button onClick={() => onUpdateTrack(track.id, { monitoring: !track.monitoring })}
+                    className={`p-1 rounded-md border transition-all ${track.monitoring ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-black/30 border-aether-700/50 text-gray-600 hover:text-gray-400'
+                      }`} title="Monitor">
+                    <Headphones size={12} />
                   </button>
                   <button onClick={() => onUpdateTrack(track.id, { muted: !track.muted })}
-                    className={`p-1.5 rounded-lg border transition-all ${track.muted ? 'bg-red-500/20 border-red-500/30 text-red-500' : 'bg-black/30 border-aether-700/50 text-gray-500 hover:text-white'}`}>
-                    {track.muted ? <MicOff size={14} /> : <Mic size={14} />}
+                    className={`p-1 rounded-md border transition-all ${track.muted ? 'bg-red-500/20 border-red-500/30 text-red-500' : 'bg-black/30 border-aether-700/50 text-gray-500 hover:text-white'}`}>
+                    {track.muted ? <MicOff size={12} /> : <Mic size={12} />}
                   </button>
                 </div>
               </div>
 
-              {/* Segmented VU Meter */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex-1 relative h-3 bg-black rounded-sm overflow-hidden border border-white/5 flex gap-[1px] p-[1px]">
-                    {Array.from({ length: 40 }).map((_, i) => {
-                      const fill = (s.rms / 100) * 40;
-                      const active = i < fill;
-                      const color = i > 35 ? 'bg-red-500' : i > 28 ? 'bg-yellow-400' : i > 15 ? 'bg-green-500' : 'bg-green-600/60';
-                      return <div key={i} className={`flex-1 h-full rounded-[0.5px] transition-all duration-75 ${active ? color : 'bg-gray-950'}`} />;
-                    })}
-                    {/* Peak Hold Tick */}
-                    <div className="absolute top-0 h-full w-[1.5px] bg-white/90 shadow-[0_0_4px_white] transition-all duration-75" style={{ left: `${s.peakHold}%` }} />
-
-                    {/* Target Zone Marker */}
-                    <div className="absolute top-0 h-full w-[20%] left-[60%] border-x border-white/20 bg-white/5 pointer-events-none" />
-                  </div>
-                  <span className="text-[10px] font-mono text-gray-400 w-10 text-right">{track.volume}%</span>
+              {/* Ultra-Compact VU Meter & Volume integrated Row */}
+              <div className="flex items-center gap-2">
+                <div className="flex-1 relative h-2.5 bg-black rounded-[1px] overflow-hidden border border-white/5 flex gap-[0.5px] p-[0.5px]">
+                  {Array.from({ length: 30 }).map((_, i) => {
+                    const fill = (s.rms / 100) * 30;
+                    const active = i < fill;
+                    const color = i > 25 ? 'bg-red-500' : i > 20 ? 'bg-yellow-400' : 'bg-green-500';
+                    return <div key={i} className={`flex-1 h-full rounded-[0.5px] transition-all duration-75 ${active ? color : 'bg-gray-950'}`} />;
+                  })}
+                  <div className="absolute top-0 h-full w-[1px] bg-white/90 transition-all duration-75" style={{ left: `${s.peakHold}%` }} />
                 </div>
-
-                <div className="flex items-center gap-2">
-                  <VolumeX size={10} className="text-gray-600" />
+                <div className="flex items-center w-20 shrink-0 gap-1.5">
                   <input type="range" min="0" max="100" value={track.volume}
                     onChange={(e) => onUpdateTrack(track.id, { volume: parseInt(e.target.value) })}
                     className="flex-1 h-1 bg-black rounded-lg appearance-none cursor-pointer accent-aether-500" />
-                  <Volume2 size={10} className="text-gray-600" />
-                </div>
-                <div className="flex justify-between px-1">
-                  <span className="text-[8px] text-gray-600 uppercase">Silence</span>
-                  <span className="text-[8px] text-aether-500 uppercase font-black">Clarity sweet spot</span>
-                  <span className="text-[8px] text-gray-600 uppercase">Clip</span>
+                  <span className="text-[9px] font-mono text-gray-500 w-5 text-right font-bold">{track.volume}</span>
                 </div>
               </div>
             </div>
