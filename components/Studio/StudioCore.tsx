@@ -14,6 +14,7 @@ import { Layer, SourceType, AudioTrackConfig, StreamStatus } from '../../types';
 import { auth } from '../../services/firebase';
 import { verifyLicenseKey, issueLicenseKey } from '../../services/licenseService';
 import { signOut, User } from 'firebase/auth';
+import { logStreamStart, logStreamStop, logStreamError } from '../../services/telemetryService';
 import { generateRoomId, getCleanPeerId } from '../../utils/peerId';
 import Peer, { DataConnection, MediaConnection } from "peerjs";
 
@@ -375,6 +376,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const encoderRetryInFlightRef = useRef(false);
   const encoderChunkStateRef = useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
   const encoderStartAtRef = useRef<number | null>(null);
+  const streamSessionIdRef = useRef<string | null>(null);
+  const telemetryLogIdRef = useRef<string | null>(null);
   const pendingStartRef = useRef<{ streamKey: string; destinations: string[]; sent: boolean; sentAt: number | null } | null>(null);
 
   // --- EFFECTS ---
@@ -1547,6 +1550,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     encoderRetryInFlightRef.current = false;
     encoderChunkStateRef.current = { count: 0, lastAt: 0 };
     pendingStartRef.current = null;
+    if (telemetryLogIdRef.current && encoderStartAtRef.current) {
+      const duration = (Date.now() - encoderStartAtRef.current) / 1000;
+      void logStreamStop(telemetryLogIdRef.current, duration);
+    }
+    telemetryLogIdRef.current = null;
+    streamSessionIdRef.current = null;
     encoderStartAtRef.current = null;
     resetEncoderBootstrap('inactive');
     try { mediaRecorderRef.current?.stop(); } catch { }
@@ -1623,6 +1632,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         setStreamStatus(StreamStatus.LIVE);
         return;
       }
+      if (telemetryLogIdRef.current && encoderStartAtRef.current) {
+        const duration = (Date.now() - encoderStartAtRef.current) / 1000;
+        void logStreamStop(telemetryLogIdRef.current, duration);
+      }
       try { mediaRecorderRef.current.stop(); } catch { }
     }
 
@@ -1669,6 +1682,14 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     if (selectedMime) {
       recorderOptions.mimeType = selectedMime;
     }
+
+    const sessionId = generateId();
+    streamSessionIdRef.current = sessionId;
+    encoderStartAtRef.current = Date.now();
+
+    // Log telemetry - don't await to avoid blocking UI
+    logStreamStart(user.uid, user.email || 'unknown', sessionId, destinationsList, wifiMode ? 'wifi_low' : chosenQuality)
+      .then(id => { if (id) telemetryLogIdRef.current = id; });
 
     let recorder: MediaRecorder;
     try {
@@ -1746,6 +1767,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       setStatusMsg({ type: 'error', text: message, persistent: true });
       encoderRetryInFlightRef.current = false;
       pendingStartRef.current = null;
+
+      if (telemetryLogIdRef.current && encoderStartAtRef.current) {
+        const duration = (Date.now() - encoderStartAtRef.current) / 1000;
+        void logStreamStop(telemetryLogIdRef.current, duration);
+      }
+      void logStreamError(user.uid, user.email || 'unknown', streamSessionIdRef.current || 'unknown', reason);
+
+      telemetryLogIdRef.current = null;
+      streamSessionIdRef.current = null;
       encoderStartAtRef.current = null;
       try { recorder.stop(); } catch { }
       sendStopStreamCommand();

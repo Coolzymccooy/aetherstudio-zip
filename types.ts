@@ -77,3 +77,19 @@ export interface SignalData {
   roomId: string;
   payload: any;
 }
+
+// Telemetry Types
+export interface TelemetryEvent {
+  id?: string;
+  uid: string;
+  email: string;
+  type: 'stream_start' | 'stream_stop' | 'stream_error';
+  timestamp: any; // ServerTimestamp
+  sessionId: string;
+  duration?: number; // seconds
+  destinations?: string[];
+  quality?: string;
+  error?: string;
+  appVersion: string;
+  platform: string;
+}

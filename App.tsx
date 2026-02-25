@@ -55,25 +55,18 @@ export default function App() {
     setRehydrated(true);
   }, []);
 
-  // 2. Handle Authentication State
   useEffect(() => {
     if (!hasFirebaseConfig || !auth) {
       setLoading(false);
       return;
     }
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      // If we already have a mock user, don't overwrite with null unless explicit logout
-      if (!currentUser && user?.isAnonymous === false && user?.email === 'dev@local.test') {
-        // Keep mock user
-      } else {
-        setUser(currentUser);
-      }
+      setUser(currentUser);
       setLoading(false);
 
       // 3. Post-Login Redirection Logic
       if (currentUser) {
         const savedMode = localStorage.getItem('aether_mode');
-
         if (savedMode === 'companion' || savedMode === 'audience') {
           setView('mobile');
           localStorage.setItem('aether_last_view', 'mobile');
@@ -83,54 +76,11 @@ export default function App() {
             setView('studio');
           }
         }
-      } else {
-        const last = localStorage.getItem('aether_last_view');
-        const devBypass = localStorage.getItem('aether_dev_bypass') === 'true';
-        if (isDesktopRuntime && rehydrated) {
-          handleDevBypass();
-        } else if (rehydrated && last === 'studio' && devBypass) {
-          handleDevBypass();
-        }
       }
     });
 
     return () => unsubscribe();
-  }, [isDesktopRuntime, rehydrated, view]);
-
-  // Dev Bypass Handler
-  const handleDevBypass = () => {
-    const mockUser = {
-      uid: 'dev-123',
-      email: 'dev@local.test',
-      displayName: 'Dev User',
-      emailVerified: true,
-      isAnonymous: false,
-      metadata: {},
-      providerData: [],
-      refreshToken: '',
-      tenantId: null,
-      delete: async () => { },
-      getIdToken: async () => 'mock-token',
-      getIdTokenResult: async () => ({
-        token: 'mock',
-        signInProvider: 'custom',
-        claims: {},
-        authTime: Date.now(),
-        issuedAtTime: Date.now(),
-        expirationTime: Date.now() + 3600000,
-      }),
-      reload: async () => { },
-      toJSON: () => ({}),
-      phoneNumber: null,
-      photoURL: null,
-      providerId: 'custom'
-    } as unknown as User;
-
-    setUser(mockUser);
-    setView('studio');
-    localStorage.setItem('aether_last_view', 'studio');
-    localStorage.setItem('aether_dev_bypass', 'true');
-  };
+  }, [view]);
 
   if (loading) {
     return (
@@ -176,13 +126,7 @@ export default function App() {
   }
 
   if (view === 'studio') {
-    // Enforce Auth for Studio (optional, but good for analytics)
     if (!user) {
-      if (isDesktopRuntime) {
-        handleDevBypass();
-        return null;
-      }
-      // If somehow here without user, fallback to landing to sign in
       setView('landing');
       return null;
     }
@@ -190,7 +134,6 @@ export default function App() {
       <StudioCore
         user={user}
         onBack={() => {
-          if (isDesktopRuntime) return;
           setUser(null);
           setView('landing');
           localStorage.removeItem('aether_last_view');
@@ -204,7 +147,6 @@ export default function App() {
       user={user}
       onEnterStudio={() => { setView('studio'); localStorage.setItem('aether_last_view', 'studio'); }}
       onOpenMobileMode={() => { setView('mobile'); localStorage.setItem('aether_last_view', 'mobile'); }}
-      onDevBypass={handleDevBypass}
     />
   );
 }
