@@ -446,3 +446,40 @@ If you want me to continue with **Stripe integration** or **mobile layout upgrad
 - Audio Signal Analysis: Confirmed working across local and mobile inputs.
 - Camera Switching: Verified instant (no blackout) on "Make Main".
 - Repository: All changes pushed to `master` (commit `3c5a7b8`).
+
+---
+
+## Update (2026-02-24) - Audience Message Submission (v0.1.4)
+
+### Goals
+- Implement a remote submission portal for congregation members.
+- Enable the Studio host to ingest audience messages in real-time.
+- Integrate audience portal generation into the existing QR connection workflow.
+- Ensure seamless routing for mobile users via deep links.
+
+### Changes implemented
+
+#### Studio Core (`StudioCore.tsx`)
+- **Real-time Ingestion**: Added a PeerJS data handler for `audience-message` types.
+- **Message Formatting**: Automatically prepends message categories (Q&A, Prayer, etc.) to incoming text.
+- **Status Feedback**: Added logic to trigger a host-side status notification when new audience messages arrive.
+
+#### Mobile Studio (`MobileStudio.tsx`)
+- **Audience Mode**: Implemented a dedicated UI for congregation members to select message categories and submit text.
+- **Connection Management**: Created a lightweight PeerJS data-only connection logic specifically for one-off message submission.
+- **Submission UI**: Added Lucide-icons, category selectors, and a success feedback state for user interaction.
+
+#### QR Portal (`QRConnectModal.tsx`)
+- **Mode Selector**: Added a UI toggle to switch between "Camera Mode" and "Audience Mode".
+- **Dynamic URL Generation**: Updated `getMobileUrl` to append `mode=audience` to the generated connection string.
+- **Themed UI**: Updated the modal header and descriptions to reflect the selected mode.
+
+#### App Routing (`App.tsx`)
+- **Deep Link Detection**: Updated URL parameter parsing to recognize `mode=audience`.
+- **Persistent Routing**: Integrated audience mode into the local storage rehydration logic to ensure users stay in the portal after refreshes.
+
+### Verification status
+- `git commit` & `git tag v0.1.4`: Completed.
+- `git push origin master --tags`: Successfully triggered CI/CD and Electron publish.
+- Message Flow Verification: Confirmed end-to-end delivery from Mobile (Audience Mode) to Studio Queue.
+- Release: v0.1.4 is now live.

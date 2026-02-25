@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Monitor, Camera, Image as ImageIcon, Type, Circle, Zap, Settings, PlaySquare, StopCircle, Radio, X, Sliders, Sparkles, Download, Package, FolderInput, Network, ExternalLink, AlertCircle, AlertTriangle, Smartphone, HelpCircle, Disc, Square, Cloud, LogOut, Link as LinkIcon, RefreshCw, Activity, Tv, ChevronRight } from 'lucide-react';
+import { Monitor, Camera, Image as ImageIcon, Type, Circle, Zap, Settings, PlaySquare, StopCircle, Radio, X, Sliders, Sparkles, Download, Package, FolderInput, Network, ExternalLink, AlertCircle, AlertTriangle, Smartphone, HelpCircle, Disc, Square, Cloud, LogOut, Link as LinkIcon, RefreshCw, Activity, Tv, ChevronRight, Shield } from 'lucide-react';
 import { getPeerEnv } from "../../src/utils/peerEnv";
 import { CanvasStage } from './CanvasStage';
 import { AudioMixer } from './AudioMixer';
@@ -8,6 +8,8 @@ import { LayerProperties } from './LayerProperties';
 import { DeviceSelectorModal } from './DeviceSelectorModal';
 import { QRConnectModal } from './QRConnectModal';
 import { HelpModal } from './HelpModal';
+import { OpsAgentPanel } from './OpsAgentPanel';
+import type { SystemSnapshot } from '../../services/opsAgentService';
 import { Layer, SourceType, AudioTrackConfig, StreamStatus } from '../../types';
 import { auth } from '../../services/firebase';
 import { verifyLicenseKey, issueLicenseKey } from '../../services/licenseService';
@@ -160,7 +162,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [streamStatus]);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
-  const [rightPanelTab, setRightPanelTab] = useState<'properties' | 'ai' | 'inputs'>('ai');
+  const [rightPanelTab, setRightPanelTab] = useState<'properties' | 'ai' | 'inputs' | 'ops'>('ai');
   const [showSettings, setShowSettings] = useState(false);
   const [settingsPos, setSettingsPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [inputsSection, setInputsSection] = useState<string>('input-manager');
@@ -329,6 +331,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const activeCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const keepAliveRef = useRef<number | null>(null);
+  const peerHttpKeepAliveRef = useRef<number | null>(null);
+  const fatalRecoveryCountRef = useRef(0);
   const mobileCamLayerIdRef = useRef<string | null>(null);
   const localRecorderRef = useRef<MediaRecorder | null>(null);
   const localChunksRef = useRef<Blob[]>([]);
@@ -986,6 +990,13 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       }
     }, 5000);
 
+    // PeerJS server HTTP keep-alive — prevents Render free-tier from sleeping
+    if (peerHttpKeepAliveRef.current) window.clearInterval(peerHttpKeepAliveRef.current);
+    const peerHttpBase = `http${peerEnv.secure ? 's' : ''}://${peerEnv.host}:${peerEnv.port}${peerEnv.path || ''}`;
+    peerHttpKeepAliveRef.current = window.setInterval(() => {
+      fetch(`${peerHttpBase}/`, { method: 'GET', mode: 'no-cors' }).catch(() => { });
+    }, 240000); // every 4 minutes
+
     // Sync Timer
     if (cloudSyncTimerRef.current) window.clearInterval(cloudSyncTimerRef.current);
     cloudSyncTimerRef.current = window.setInterval(() => {
@@ -1004,7 +1015,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     const wsUrl = getRelayWsUrl();
 
     const connectRelay = () => {
-      if (!wsUrl) {
+      const effectiveWsUrl = getRelayWsUrl();
+      const effectiveRelayToken = getRelayToken();
+
+      if (!effectiveWsUrl) {
         setRelayConnected(false);
         setRelayStatus("Relay URL not configured");
         return;
@@ -1012,17 +1026,20 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       const pageIsHttps = window.location.protocol === "https:";
       const pageHost = window.location.hostname;
       const pageIsLocal = pageHost === "localhost" || pageHost === "127.0.0.1";
-      if (pageIsHttps && wsUrl.startsWith("ws://")) {
+
+      // Final mixed-content check
+      if (pageIsHttps && effectiveWsUrl.startsWith("ws://")) {
         setRelayConnected(false);
-        setRelayStatus("Invalid relay URL for HTTPS page");
+        setRelayStatus("Insecure relay URL on HTTPS page");
         setStatusMsg({
           type: "error",
-          text: "Relay URL uses ws:// on an HTTPS page. Use wss:// relay URL, or run the app locally at http://localhost:5174.",
+          text: "Relay URL uses ws:// on an HTTPS page. Please check VITE_SIGNAL_URL_PROD.",
           persistent: true,
         });
         return;
       }
-      if (!pageIsLocal && /^(ws|wss):\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(wsUrl)) {
+
+      if (!pageIsLocal && /^(ws|wss):\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(effectiveWsUrl)) {
         setRelayConnected(false);
         setRelayStatus("Local relay URL cannot be used from deployed app");
         setStatusMsg({
@@ -1033,7 +1050,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         return;
       }
       try {
-        ws = new WebSocket(wsUrl);
+        ws = new WebSocket(effectiveWsUrl);
         streamingSocketRef.current = ws;
 
         ws.onopen = () => {
@@ -1043,7 +1060,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             type: "join",
             role: "host",
             sessionId: roomId,
-            token: import.meta.env.VITE_RELAY_TOKEN,
+            token: effectiveRelayToken,
           }));
           if (liveIntentRef.current) {
             const now = Date.now();
@@ -1132,6 +1149,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
     return () => {
       if (keepAliveRef.current) clearInterval(keepAliveRef.current);
+      if (peerHttpKeepAliveRef.current) clearInterval(peerHttpKeepAliveRef.current);
       if (cloudDisconnectTimerRef.current) clearTimeout(cloudDisconnectTimerRef.current);
       if (cloudSyncTimerRef.current) clearInterval(cloudSyncTimerRef.current);
       if (relayRetryTimer) clearTimeout(relayRetryTimer);
@@ -1494,8 +1512,35 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     if (attempts != null) text += ` (${attempts} attempts)`;
     if (lastError) text += ` — ${String(lastError).slice(0, 120)}`;
     setRelayStatus(`Relay fatal: ${reason}`);
+
+    // Auto-recovery: for recoverable fatals, attempt to restart after a delay
+    const nonRecoverable = ['not_active_host'];
+    if (!nonRecoverable.includes(reason) && fatalRecoveryCountRef.current < 2) {
+      fatalRecoveryCountRef.current += 1;
+      const recoveryAttempt = fatalRecoveryCountRef.current;
+      setStatusMsg({ type: 'warn', text: `${text} — Auto-recovering (attempt ${recoveryAttempt}/2)...`, persistent: false });
+      // Keep liveIntent alive so the relay reconnect resumes the stream
+      qualityDowngradeInFlightRef.current = false;
+      congestionWindowStartRef.current = null;
+      congestionWarningShownRef.current = false;
+      encoderRetryInFlightRef.current = false;
+      encoderChunkStateRef.current = { count: 0, lastAt: 0 };
+      pendingStartRef.current = null;
+      encoderStartAtRef.current = null;
+      resetEncoderBootstrap('inactive');
+      try { mediaRecorderRef.current?.stop(); } catch { }
+      // Wait, then restart the stream
+      setTimeout(() => {
+        if (!liveIntentRef.current) return; // user manually stopped
+        startStreamingSession({ fromReconnect: true, forceRestart: true });
+      }, 5000);
+      return;
+    }
+
+    // Non-recoverable or exhausted recovery attempts
     setStatusMsg({ type: "error", text, persistent: true });
     liveIntentRef.current = false;
+    fatalRecoveryCountRef.current = 0;
     qualityDowngradeInFlightRef.current = false;
     congestionWindowStartRef.current = null;
     congestionWarningShownRef.current = false;
@@ -1638,8 +1683,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     const SOFT_BUFFER_BYTES = 2 * 1024 * 1024;
     const HARD_BUFFER_BYTES = 8 * 1024 * 1024;
     const SUSTAINED_CONGESTION_MS = 5000;
-    const STALE_CHUNK_MS = 7000;
-    const NO_CHUNK_BOOTSTRAP_MS = 8000;
+    const STALE_CHUNK_MS = 12000;
+    const NO_CHUNK_BOOTSTRAP_MS = 15000;
     const RECORDER_START_DEADLINE_MS = 1200;
     let receivedAnyChunk = false;
     let relayStartSent = false;
@@ -1887,6 +1932,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     setRelayStatus(`Browser encoder active (${encoderMode}${selectedMime ? `, ${selectedMime}` : ""})`);
     setEncoderBootstrap((prev) => ({ ...prev, recorderState: recorder.state || "starting" }));
     setStreamStatus(StreamStatus.LIVE);
+    fatalRecoveryCountRef.current = 0; // reset on successful stream start
   };
 
   const toggleLive = async () => {
@@ -1999,14 +2045,53 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     const currentHost = window.location.hostname;
     const isLocalHost = currentHost === "localhost" || currentHost === "127.0.0.1";
     const isDesktopFile = protocol === "file:";
+
     let wsUrl = "";
     if (isDesktopFile) {
       wsUrl = wsUrlLocal || "ws://127.0.0.1:8080";
     } else {
       wsUrl = (isLocalHost ? wsUrlLocal : wsUrlRaw) || wsUrlRaw || "";
     }
+
     if (!wsUrl) return "";
+
+    // HTTPS Auto-Fallback (e.g. Cloudflare tunnel)
+    if (protocol === "https:" && wsUrl.startsWith("ws://")) {
+      const prodRelay = (import.meta.env.VITE_SIGNAL_URL_PROD as string) || "";
+      if (prodRelay && prodRelay.startsWith("wss://")) {
+        return prodRelay.replace(/\/+$/, "");
+      }
+    }
+
     return wsUrl.replace(/\/+$/, "");
+  };
+
+  const getRelayToken = () => {
+    const defaultToken = (import.meta.env.VITE_RELAY_TOKEN as string) || "";
+    const prodToken = (import.meta.env.VITE_RELAY_TOKEN_PROD as string) || "";
+    const protocol = window.location.protocol;
+    const wsUrlRaw = (import.meta.env.VITE_SIGNAL_URL as string) || (import.meta.env.VITE_RELAY_WS_URL as string);
+    const wsUrlLocal = import.meta.env.VITE_SIGNAL_URL_LOCAL as string;
+    const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    const isDesktopFile = protocol === "file:";
+
+    let wsUrl = "";
+    if (isDesktopFile) {
+      wsUrl = wsUrlLocal || "ws://127.0.0.1:8080";
+    } else {
+      wsUrl = (isLocalHost ? wsUrlLocal : wsUrlRaw) || wsUrlRaw || "";
+    }
+
+    // If we're on an HTTPS page and the default relay url is ws://, we're likely in a tunnel
+    // and should use the production token instead.
+    if (protocol === "https:" && wsUrl.startsWith("ws://")) {
+      const prodRelay = (import.meta.env.VITE_SIGNAL_URL_PROD as string) || "";
+      if (prodRelay && prodRelay.startsWith("wss://")) {
+        return prodToken;
+      }
+    }
+
+    return defaultToken;
   };
 
   const getRelayHttpBase = () => {
@@ -2106,6 +2191,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   useEffect(() => {
     if (peerUiMode === 'auto') {
       setPeerMode('cloud');
+      // Persist immediately so getPeerEnv() uses cloud on next peer init
+      localStorage.setItem('aether_peer_mode', 'cloud');
+      localStorage.setItem('aether_peer_ui_mode', 'auto');
       return;
     }
     if (peerUiMode === 'local') {
@@ -2114,9 +2202,13 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       setPeerPort('9000');
       setPeerPath('/peerjs');
       setPeerSecure(false);
+      localStorage.setItem('aether_peer_mode', 'custom');
+      localStorage.setItem('aether_peer_ui_mode', 'local');
     }
     if (peerUiMode === 'advanced') {
       setPeerMode('custom');
+      localStorage.setItem('aether_peer_mode', 'custom');
+      localStorage.setItem('aether_peer_ui_mode', 'advanced');
     }
   }, [peerUiMode]);
 
@@ -2899,6 +2991,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             <button onClick={() => setRightPanelTab('properties')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'properties' ? 'bg-aether-800 text-white' : 'text-gray-500'}`}><Sliders size={14} /> Properties</button>
             <button onClick={() => setRightPanelTab('inputs')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'inputs' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Camera size={14} /> Inputs</button>
             <button onClick={() => setRightPanelTab('ai')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'ai' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Sparkles size={14} /> AI Studio</button>
+            <button onClick={() => setRightPanelTab('ops')} className={`flex-1 py-3 text-xs font-bold uppercase flex justify-center gap-2 ${rightPanelTab === 'ops' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Shield size={14} /> Ops</button>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto">
             {rightPanelTab === 'properties' && (
@@ -2906,6 +2999,30 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             )}
             {rightPanelTab === 'ai' && (
               <AIPanel onAddLayer={(src) => addImageLayer(src, 'AI Background')} />
+            )}
+            {rightPanelTab === 'ops' && (
+              <OpsAgentPanel
+                snapshot={{
+                  relayConnected,
+                  relayStatus,
+                  streamHealth,
+                  streamStatus: streamStatus === StreamStatus.LIVE ? 'live' : streamStatus === StreamStatus.RECORDING ? 'starting' : 'idle',
+                  streamKey,
+                  cameraSources: cameraSources.map(c => ({ id: c.id, status: c.status, kind: c.kind, label: c.label })),
+                  peerConnected: cloudConnected,
+                  wsUrl: getRelayWsUrl(),
+                  lastRelayFatal: relayStatus && /fatal|max_restart/i.test(relayStatus) ? relayStatus : null,
+                } as SystemSnapshot}
+                onReconnectRelay={() => {
+                  // Close current WS to trigger its onclose reconnect logic
+                  const ws = streamingSocketRef.current;
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.close();
+                  }
+                }}
+                onRestartStream={() => { startStreamingSession({ fromReconnect: true, forceRestart: false }); }}
+                onOpenSettings={() => { setShowSettings(true); }}
+              />
             )}
             {rightPanelTab === 'inputs' && (
               <div className="h-full overflow-y-auto p-4 pb-24 space-y-3">

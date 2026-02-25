@@ -6,7 +6,15 @@ const getAiBaseUrl = () => {
 
   const rawLocal = (import.meta.env.VITE_AI_BASE_URL_LOCAL as string | undefined) || "";
   const rawPublic = (import.meta.env.VITE_AI_BASE_URL as string | undefined) || "";
-  const raw = (isLocal ? rawLocal : rawPublic) || rawPublic;
+  const rawProd = (import.meta.env.VITE_AI_BASE_URL_PROD as string | undefined) || "";
+  const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+
+  let raw = (isLocal ? rawLocal : rawPublic) || rawPublic;
+
+  // Auto-switch to production AI if on HTTPS (Cloudflare tunnel) but default is insecure localhost
+  if (isHttps && rawProd && raw.startsWith("http://") && raw.includes("localhost")) {
+    raw = rawProd;
+  }
 
   if (raw) return raw.replace(/\/+$/, "");
 

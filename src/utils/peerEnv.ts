@@ -6,7 +6,7 @@ const CLOUD_DEFAULT: PeerEnv = {
   host: "0.peerjs.com",
   port: 443,
   secure: true,
-  path: "/peerjs",
+  path: "/",  // PeerJS client appends /peerjs automatically — do NOT set /peerjs here or it doubles
 };
 
 const storage = {
@@ -45,7 +45,7 @@ export function getPeerEnv(): PeerEnv {
     queryPort = params.get("peerPort");
     queryPath = params.get("peerPath");
     querySecure = params.get("peerSecure");
-  } catch {}
+  } catch { }
 
   // 2) LocalStorage (runtime settings)
   const storedMode = (localStorage.getItem(storage.mode) as PeerMode | null) || null;

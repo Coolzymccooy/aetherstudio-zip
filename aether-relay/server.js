@@ -74,12 +74,12 @@ const RESTART_MAX_DELAY_MS = Math.max(
 );
 const MAX_RESTART_ATTEMPTS = Math.max(
   1,
-  Number(process.env.RELAY_MAX_RESTART_ATTEMPTS || 10)
+  Number(process.env.RELAY_MAX_RESTART_ATTEMPTS || 25)
 );
-const RELAY_SOAK_RESET_MS = Math.max(5000, Number(process.env.RELAY_SOAK_RESET_MS || 45000));
+const RELAY_SOAK_RESET_MS = Math.max(5000, Number(process.env.RELAY_SOAK_RESET_MS || 90000));
 const INPUT_CHUNK_TIMEOUT_MS = Math.max(
   2000,
-  Number(process.env.RELAY_INPUT_CHUNK_TIMEOUT_MS || 15000)
+  Number(process.env.RELAY_INPUT_CHUNK_TIMEOUT_MS || 30000)
 );
 
 const resolveFfmpegPath = () => {
@@ -368,6 +368,28 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/ops/diagnose") {
+    const diagResult = {
+      ok: true, diagnostics: {
+        ffmpegAvailable: false,
+        ffmpegVersion: "unknown",
+        activeStreams: relayRuntime.activeStreams,
+        restartAttempts: relayRuntime.restartAttempts,
+        lastError: relayRuntime.lastError,
+        wsConnections: wss?.clients?.size || 0,
+        uptimeSeconds: Math.floor(process.uptime()),
+      }
+    };
+    runFfmpegCheck((err, version) => {
+      if (!err && version) {
+        diagResult.diagnostics.ffmpegAvailable = true;
+        diagResult.diagnostics.ffmpegVersion = version;
+      }
+      sendJson(200, diagResult);
+    });
+    return;
+  }
+
   if (pathname === "/ai/health") {
     if (!GEMINI_API_KEY) {
       sendJson(503, { ok: false, error: "missing_gemini_api_key" });
@@ -472,7 +494,24 @@ const server = http.createServer(async (req, res) => {
 // Allow WS on both "/" and "/ws".
 const wss = new WebSocketServer({ server, path: undefined });
 
+// ── WebSocket Heartbeat ─ detect and terminate dead connections ──
+const WS_HEARTBEAT_INTERVAL_MS = 30000;
+const wsHeartbeat = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws._aetherAlive === false) {
+      logEvent("ws.heartbeat_dead", { msg: "terminating unresponsive client" });
+      return ws.terminate();
+    }
+    ws._aetherAlive = false;
+    ws.ping();
+  });
+}, WS_HEARTBEAT_INTERVAL_MS);
+wss.on("close", () => clearInterval(wsHeartbeat));
+
 wss.on("connection", (ws, req) => {
+  ws._aetherAlive = true;
+  ws.on("pong", () => { ws._aetherAlive = true; });
+
   const { pathname } = url.parse(req.url || "/");
   const clientIp =
     req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() || req.socket.remoteAddress;
