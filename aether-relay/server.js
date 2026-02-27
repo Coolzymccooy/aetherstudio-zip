@@ -1,11 +1,12 @@
 // aether-relay/server.js (CommonJS)
 const http = require("http");
 const { WebSocketServer } = require("ws");
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const url = require("url");
 const crypto = require("crypto");
+const net = require("net");
 const {
   DEFAULT_MAX_DESTINATIONS,
   DEFAULT_SOFT_QUEUE_BYTES,
@@ -34,7 +35,12 @@ const loadGoogleGenAi = async () => {
   }
 };
 
-const PORT = Number(process.env.PORT || 8080);
+const RELAY_PORT = Number(process.env.RELAY_PORT || process.env.PORT || 8080);
+const RELAY_AUTO_REBIND = String(process.env.RELAY_AUTO_REBIND || "false").toLowerCase() === "true";
+const RELAY_REUSE_PORT =
+  process.argv.includes("--reuse-port") || String(process.env.RELAY_REUSE_PORT || "").toLowerCase() === "true";
+const RELAY_MAX_HOST_SOCKETS = Math.max(1, Number(process.env.RELAY_MAX_HOST_SOCKETS || 6));
+const RELAY_PORT_SCAN_LIMIT = 15;
 const RELAY_TOKEN = process.env.RELAY_TOKEN || "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const LICENSE_SECRET = process.env.LICENSE_SECRET || "";
@@ -90,7 +96,130 @@ const resolveFfmpegPath = () => {
   return envPath || platformDefault;
 };
 const FFMPEG_PATH = resolveFfmpegPath();
+const LOCAL_RUN_DIR = path.join(__dirname, "..", ".local-run");
+const RELAY_LOCK_PATH = path.join(LOCAL_RUN_DIR, "relay.pid");
+const ensureDir = (dir) => {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch { }
+};
 
+ensureDir(LOCAL_RUN_DIR);
+
+const processExists = (pid) => {
+  try {
+    return process.kill(pid, 0), true;
+  } catch (err) {
+    return err && err.code === "EPERM";
+  }
+};
+
+const cleanupLock = () => {
+  try {
+    if (fs.existsSync(RELAY_LOCK_PATH)) fs.unlinkSync(RELAY_LOCK_PATH);
+  } catch { }
+};
+
+const ensureSingleInstance = () => {
+  try {
+    if (fs.existsSync(RELAY_LOCK_PATH)) {
+      const existingPid = Number(fs.readFileSync(RELAY_LOCK_PATH, "utf8").trim());
+      if (existingPid && processExists(existingPid)) {
+        const msg = `relay_already_running_pid_${existingPid}`;
+        logEvent("relay.lock_exists", { pid: existingPid });
+        throw new Error(msg);
+      }
+    }
+    fs.writeFileSync(RELAY_LOCK_PATH, String(process.pid));
+    process.once("exit", cleanupLock);
+    process.once("SIGINT", () => {
+      cleanupLock();
+      process.exit();
+    });
+    process.once("SIGTERM", () => {
+      cleanupLock();
+      process.exit();
+    });
+  } catch (err) {
+    setLastError(err?.message || "relay_lock_failed");
+    throw err;
+  }
+};
+
+const rotateLocalLogs = (maxBytes = 2 * 1024 * 1024, keep = 3) => {
+  if (!fs.existsSync(LOCAL_RUN_DIR)) return;
+  const now = Date.now();
+  const logFiles = fs
+    .readdirSync(LOCAL_RUN_DIR)
+    .filter((f) => f.endsWith(".log"))
+    .map((f) => path.join(LOCAL_RUN_DIR, f));
+
+  logFiles.forEach((file) => {
+    try {
+      const stat = fs.statSync(file);
+      if (stat.size <= maxBytes) return;
+      const rotated = `${file}.${now}.bak`;
+      fs.renameSync(file, rotated);
+    } catch { }
+  });
+
+  // prune old backups per base name
+  const byBase = new Map();
+  fs.readdirSync(LOCAL_RUN_DIR)
+    .filter((f) => f.endsWith(".bak"))
+    .forEach((f) => {
+      const base = f.split(".log")[0];
+      if (!byBase.has(base)) byBase.set(base, []);
+      byBase.get(base).push(path.join(LOCAL_RUN_DIR, f));
+    });
+
+  byBase.forEach((files) => {
+    const sorted = files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+    sorted.slice(keep).forEach((stale) => {
+      try { fs.unlinkSync(stale); } catch { }
+    });
+  });
+};
+
+const logPortConflict = (port) => {
+  try {
+    const out = execSync(`netstat -ano | findstr :${port}`, { encoding: "utf8" });
+    logEvent("relay.port_conflict", { port, netstat: out.split(/\r?\n/).slice(0, 4).join(" ") });
+  } catch (err) {
+    logEvent("relay.port_conflict", { port, netstat: "unavailable", error: err?.message || "netstat_failed" });
+  }
+};
+
+const isPortFree = (port) =>
+  new Promise((resolve) => {
+    const tester = net.createServer();
+    tester.once("error", () => {
+      tester.close(() => resolve(false));
+    });
+    tester.once("listening", () => {
+      tester.close(() => resolve(true));
+    });
+    tester.listen({ port, host: "0.0.0.0", exclusive: true });
+  });
+
+const findAvailablePort = async (preferred) => {
+  const wantAuto = RELAY_AUTO_REBIND === true;
+  const limit = wantAuto ? RELAY_PORT_SCAN_LIMIT : 0;
+  for (let i = 0; i <= limit; i += 1) {
+    const candidate = preferred + i;
+    // eslint-disable-next-line no-await-in-loop
+    const free = await isPortFree(candidate);
+    if (free) {
+      if (candidate !== preferred) {
+        logEvent("relay.port_rebound", { from: preferred, to: candidate });
+      }
+      return candidate;
+    }
+    if (!wantAuto) break;
+  }
+  logPortConflict(preferred);
+  throw new Error("port_in_use");
+};
 const relayRuntime = {
   activeStreams: 0,
   totalStarts: 0,
@@ -118,6 +247,9 @@ const relayRuntime = {
   updatedAt: new Date().toISOString(),
 };
 const activeHostBySession = new Map();
+let hostSocketCount = 0;
+let ffmpegStopping = false;
+let ffmpegKillTimer = null;
 
 function touchRuntime() {
   relayRuntime.updatedAt = new Date().toISOString();
@@ -601,6 +733,7 @@ wss.on("connection", (ws, req) => {
     const shouldResetAttempts =
       opts.resetAttempts === true || reason === "stop-stream" || reason === "ws_close";
     const hadActiveProcess = !!ffmpeg || streaming;
+    const activePid = ffmpeg?.pid || null;
 
     clearRestartTimer();
     clearFirstChunkTimer();
@@ -625,18 +758,34 @@ wss.on("connection", (ws, req) => {
 
     resetIngestQueue();
     degradedTargets.clear();
+    ffmpegStopping = true;
 
     if (ffmpeg) {
+      try { ffmpeg.stdin.removeAllListeners("drain"); } catch { }
+      try { ffmpeg.stdin.end(); } catch { }
+
+      const proc = ffmpeg;
+      if (ffmpegKillTimer) {
+        clearTimeout(ffmpegKillTimer);
+        ffmpegKillTimer = null;
+      }
       try {
-        ffmpeg.stdin.removeAllListeners("drain");
+        proc.kill("SIGTERM");
+        logEvent("ffmpeg.sigterm", { ip: clientIp, reason, pid: proc.pid || null });
       } catch { }
-      try {
-        ffmpeg.stdin.end();
-      } catch { }
-      try {
-        ffmpeg.kill("SIGINT");
-      } catch { }
-      ffmpeg = null;
+      ffmpegKillTimer = setTimeout(() => {
+        try {
+          proc.kill("SIGINT");
+          logEvent("ffmpeg.sigint", { ip: clientIp, reason, pid: proc.pid || null });
+        } catch { }
+      }, 1500);
+      proc.once("close", () => {
+        if (ffmpegKillTimer) {
+          clearTimeout(ffmpegKillTimer);
+          ffmpegKillTimer = null;
+        }
+        ffmpegStopping = false;
+      });
     }
 
     if (streaming) {
@@ -660,6 +809,14 @@ wss.on("connection", (ws, req) => {
       setLastError(opts.fatalReason);
       safeSendWs(ws, fatalPayload);
     }
+
+    logEvent("ffmpeg.stop_requested", {
+      ip: clientIp,
+      reason,
+      pid: activePid,
+      ingestBytes: sessionIngestBytes,
+      ingestChunks: sessionIngestChunks,
+    });
   };
 
   const flushIngestQueue = () => {
@@ -766,6 +923,7 @@ wss.on("connection", (ws, req) => {
     clearFirstChunkTimer();
     resetIngestQueue();
     degradedTargets.clear();
+    ffmpegStopping = false;
     waitingForFirstChunk = true;
     sessionIngestBytes = 0;
     sessionIngestChunks = 0;
@@ -905,7 +1063,7 @@ wss.on("connection", (ws, req) => {
         ingestChunks: sessionIngestChunks,
       });
 
-      safeSendWs(ws, { type: "ffmpeg_closed", code, signal });
+      safeSendWs(ws, { type: "ffmpeg_closed", code, signal, ingestBytes: sessionIngestBytes, ingestChunks: sessionIngestChunks });
       currentTargets.forEach((target) => emitDestinationStatus(target, "down", `ffmpeg_closed_${code}`));
 
       if (!wantStreaming || ws.readyState !== ws.OPEN) return;
@@ -1094,6 +1252,12 @@ wss.on("connection", (ws, req) => {
           clientSessionId = String(msg.sessionId || "").trim();
 
           if (clientRole === "host" && clientSessionId) {
+            if (hostSocketCount >= RELAY_MAX_HOST_SOCKETS) {
+              safeSendWs(ws, { type: "error", error: "too_many_hosts" });
+              ws.close(4001, "too_many_hosts");
+              return;
+            }
+            hostSocketCount += 1;
             const existing = activeHostBySession.get(clientSessionId);
             if (existing && existing !== ws && existing.readyState === existing.OPEN) {
               safeSendWs(existing, {
@@ -1152,6 +1316,9 @@ wss.on("connection", (ws, req) => {
   ws.on("close", (code, reason) => {
     clearInterval(pingTimer);
     stopFfmpeg("ws_close");
+    if (clientRole === "host") {
+      hostSocketCount = Math.max(0, hostSocketCount - 1);
+    }
     if (clientRole === "host" && clientSessionId) {
       const existing = activeHostBySession.get(clientSessionId);
       if (existing === ws) {
@@ -1172,17 +1339,60 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-if (require.main === module) {
-  server.listen(PORT, "0.0.0.0", () => {
-    logEvent("relay.listen", {
-      port: PORT,
-      ffmpegPath: FFMPEG_PATH,
-      maxDestinations: MAX_DESTINATIONS,
-      softQueueBytes: SOFT_QUEUE_BYTES,
-      hardQueueBytes: HARD_QUEUE_BYTES,
-      inputChunkTimeoutMs: INPUT_CHUNK_TIMEOUT_MS,
+const startRelay = async () => {
+  try {
+    rotateLocalLogs();
+    ensureSingleInstance();
+    const port = await findAvailablePort(RELAY_PORT);
+    server.listen(
+      { port, host: "0.0.0.0", reusePort: RELAY_REUSE_PORT },
+      () => {
+        logEvent("relay.listen", {
+          port,
+          ffmpegPath: FFMPEG_PATH,
+          maxDestinations: MAX_DESTINATIONS,
+          softQueueBytes: SOFT_QUEUE_BYTES,
+          hardQueueBytes: HARD_QUEUE_BYTES,
+          inputChunkTimeoutMs: INPUT_CHUNK_TIMEOUT_MS,
+          autoRebind: RELAY_AUTO_REBIND,
+          reusePort: RELAY_REUSE_PORT,
+        });
+      }
+    );
+    server.on("error", (err) => {
+      logEvent("relay.listen_error", {
+        port,
+        error: err?.message || "listen_error",
+        code: err?.code || null,
+      });
+      if (err?.code === "EADDRINUSE" && RELAY_AUTO_REBIND) {
+        findAvailablePort(port + 1)
+          .then((nextPort) => {
+            server.listen({ port: nextPort, host: "0.0.0.0", reusePort: RELAY_REUSE_PORT }, () => {
+              logEvent("relay.listen", {
+                port: nextPort,
+                ffmpegPath: FFMPEG_PATH,
+                maxDestinations: MAX_DESTINATIONS,
+                softQueueBytes: SOFT_QUEUE_BYTES,
+                hardQueueBytes: HARD_QUEUE_BYTES,
+                inputChunkTimeoutMs: INPUT_CHUNK_TIMEOUT_MS,
+                autoRebind: RELAY_AUTO_REBIND,
+                reusePort: RELAY_REUSE_PORT,
+              });
+            });
+          })
+          .catch(() => { });
+      }
     });
-  });
+  } catch (err) {
+    logEvent("relay.start_error", { error: err?.message || "relay_start_failed" });
+    console.error("[relay] start error", err?.message || err);
+    process.exitCode = 1;
+  }
+};
+
+if (require.main === module) {
+  startRelay();
 }
 
 module.exports = {

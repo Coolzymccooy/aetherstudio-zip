@@ -5,7 +5,13 @@ import { TelemetryEvent } from '../types';
 const TELEMETRY_COLLECTION = 'telemetry';
 const APP_VERSION = '0.1.7';
 
-export const logStreamStart = async (uid: string, email: string, sessionId: string, destinations: string[], quality: string) => {
+type TelemetryExtras = {
+    reconnectCount?: number;
+    uptimeMs?: number;
+    bindError?: string | null;
+};
+
+export const logStreamStart = async (uid: string, email: string, sessionId: string, destinations: string[], quality: string, extras: TelemetryExtras = {}) => {
     if (!firestore) return null;
 
     try {
@@ -17,6 +23,9 @@ export const logStreamStart = async (uid: string, email: string, sessionId: stri
             sessionId,
             destinations,
             quality,
+            reconnectCount: extras.reconnectCount,
+            uptimeMs: extras.uptimeMs,
+            bindError: extras.bindError ?? null,
             appVersion: APP_VERSION,
             platform: typeof window !== 'undefined' && !!(window as any).aetherDesktop ? 'desktop' : 'web'
         };
@@ -29,7 +38,7 @@ export const logStreamStart = async (uid: string, email: string, sessionId: stri
     }
 };
 
-export const logStreamStop = async (logId: string, durationSeconds: number) => {
+export const logStreamStop = async (logId: string, durationSeconds: number, extras: TelemetryExtras = {}) => {
     if (!firestore || !logId) return;
 
     try {
@@ -37,6 +46,9 @@ export const logStreamStop = async (logId: string, durationSeconds: number) => {
         await updateDoc(logRef, {
             type: 'stream_stop',
             duration: Math.floor(durationSeconds),
+            reconnectCount: extras.reconnectCount,
+            uptimeMs: extras.uptimeMs,
+            bindError: extras.bindError ?? null,
             stoppedAt: serverTimestamp()
         });
     } catch (err) {
@@ -44,7 +56,7 @@ export const logStreamStop = async (logId: string, durationSeconds: number) => {
     }
 };
 
-export const logStreamError = async (uid: string, email: string, sessionId: string, error: string) => {
+export const logStreamError = async (uid: string, email: string, sessionId: string, error: string, extras: TelemetryExtras = {}) => {
     if (!firestore) return;
 
     try {
@@ -55,6 +67,9 @@ export const logStreamError = async (uid: string, email: string, sessionId: stri
             timestamp: serverTimestamp(),
             sessionId,
             error,
+            reconnectCount: extras.reconnectCount,
+            uptimeMs: extras.uptimeMs,
+            bindError: extras.bindError ?? null,
             appVersion: APP_VERSION,
             platform: typeof window !== 'undefined' && !!(window as any).aetherDesktop ? 'desktop' : 'web'
         };

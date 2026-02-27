@@ -92,6 +92,9 @@ export interface TelemetryEvent {
   destinations?: string[];
   quality?: string;
   error?: string;
+  reconnectCount?: number;
+  uptimeMs?: number;
+  bindError?: string | null;
   appVersion: string;
   platform: string;
 }

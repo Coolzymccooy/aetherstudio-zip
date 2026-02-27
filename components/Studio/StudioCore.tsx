@@ -382,6 +382,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const encoderStartAtRef = useRef<number | null>(null);
   const streamSessionIdRef = useRef<string | null>(null);
   const telemetryLogIdRef = useRef<string | null>(null);
+  const relayReconnectAttemptsRef = useRef<number>(0);
+  const relayReconnectTotalRef = useRef<number>(0);
+  const relayUptimeStartRef = useRef<number | null>(null);
+  const relayBindErrorRef = useRef<string | null>(null);
   const pendingStartRef = useRef<{ streamKey: string; destinations: string[]; sent: boolean; sentAt: number | null } | null>(null);
 
   // --- EFFECTS ---
@@ -1077,10 +1081,30 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     // Relay Connection
     let ws: WebSocket | null = null;
     let relayRetryTimer: number | null = null;
+    let relayConnecting = false;
+    const relayMaxBackoffMs = 15000;
 
-    const wsUrl = getRelayWsUrl();
+    const scheduleRelayReconnect = (hint?: string) => {
+      if (relayRetryTimer) return;
+      const attempt = relayReconnectAttemptsRef.current;
+      const delay = Math.min(relayMaxBackoffMs, 1500 * Math.pow(2, attempt));
+      relayReconnectTotalRef.current += 1;
+      relayReconnectAttemptsRef.current = attempt + 1;
+      const jitter = Math.random() * 250;
+      const finalDelay = Math.round(delay + jitter);
+      if (hint && liveIntentRef.current) {
+        setStatusMsg({ type: 'warn', text: `${hint} Reconnecting in ${Math.round(finalDelay / 1000)}s...` });
+      }
+      relayRetryTimer = window.setTimeout(() => {
+        relayRetryTimer = null;
+        connectRelay();
+      }, finalDelay);
+    };
 
     const connectRelay = () => {
+      if (relayConnecting) return;
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
       const effectiveWsUrl = getRelayWsUrl();
       const effectiveRelayToken = getRelayToken();
 
@@ -1116,10 +1140,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         return;
       }
       try {
+        relayConnecting = true;
         ws = new WebSocket(effectiveWsUrl);
         streamingSocketRef.current = ws;
 
         ws.onopen = () => {
+          relayConnecting = false;
+          relayReconnectAttemptsRef.current = 0;
+          relayUptimeStartRef.current = Date.now();
+          if (relayRetryTimer) { window.clearTimeout(relayRetryTimer); relayRetryTimer = null; }
           setRelayConnected(true);
           setRelayStatus("Relay connected");
           ws?.send(JSON.stringify({
@@ -1139,9 +1168,13 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         };
 
         ws.onclose = (ev) => {
+          relayConnecting = false;
+          relayUptimeStartRef.current = null;
           setRelayConnected(false);
           setRelayStatus(`Relay closed (${ev.code})`);
           setStreamHealth((prev) => ({ ...prev, rttMs: null }));
+          ws = null;
+          streamingSocketRef.current = null;
           if (ev.code === 4001) {
             setStatusMsg({ type: 'warn', text: "Another Studio host tab is active for this room. This tab will stay disconnected." });
             liveIntentRef.current = false;
@@ -1151,12 +1184,14 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             setStatusMsg({ type: 'warn', text: "Relay lost. Attempting to reconnect..." });
           }
           if (relayRetryTimer) window.clearTimeout(relayRetryTimer);
-          relayRetryTimer = window.setTimeout(connectRelay, 1500);
+          scheduleRelayReconnect("Relay socket closed.");
         };
 
         ws.onerror = () => {
+          relayConnecting = false;
           setRelayConnected(false);
           setStatusMsg({ type: "error", text: "Relay connection failed" });
+          scheduleRelayReconnect("Relay error.");
         };
 
         ws.onmessage = (ev) => {
@@ -1208,7 +1243,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             }
           } catch { }
         };
-      } catch { }
+      } catch {
+        relayConnecting = false;
+        scheduleRelayReconnect("Relay connect threw.");
+      }
     };
 
     connectRelay();
@@ -1615,7 +1653,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     pendingStartRef.current = null;
     if (telemetryLogIdRef.current && encoderStartAtRef.current) {
       const duration = (Date.now() - encoderStartAtRef.current) / 1000;
-      void logStreamStop(telemetryLogIdRef.current, duration);
+      const telemetryExtras = {
+        reconnectCount: relayReconnectTotalRef.current,
+        uptimeMs: relayUptimeStartRef.current ? Date.now() - relayUptimeStartRef.current : undefined,
+        bindError: relayBindErrorRef.current,
+      };
+      void logStreamStop(telemetryLogIdRef.current, duration, telemetryExtras);
     }
     telemetryLogIdRef.current = null;
     streamSessionIdRef.current = null;
@@ -1697,7 +1740,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       }
       if (telemetryLogIdRef.current && encoderStartAtRef.current) {
         const duration = (Date.now() - encoderStartAtRef.current) / 1000;
-        void logStreamStop(telemetryLogIdRef.current, duration);
+        const telemetryExtras = {
+          reconnectCount: relayReconnectTotalRef.current,
+          uptimeMs: relayUptimeStartRef.current ? Date.now() - relayUptimeStartRef.current : undefined,
+          bindError: relayBindErrorRef.current,
+        };
+        void logStreamStop(telemetryLogIdRef.current, duration, telemetryExtras);
       }
       try { mediaRecorderRef.current.stop(); } catch { }
     }
@@ -1752,7 +1800,19 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
     // Log telemetry - deferred to ensure zero impact on initial encoding start
     setTimeout(() => {
-      logStreamStart(user.uid, user.email || 'unknown', sessionId, destinationsList, wifiMode ? 'wifi_low' : chosenQuality)
+      const telemetryExtras = {
+        reconnectCount: relayReconnectTotalRef.current,
+        uptimeMs: relayUptimeStartRef.current ? Date.now() - relayUptimeStartRef.current : undefined,
+        bindError: relayBindErrorRef.current,
+      };
+      logStreamStart(
+        user.uid,
+        user.email || 'unknown',
+        sessionId,
+        destinationsList,
+        wifiMode ? 'wifi_low' : chosenQuality,
+        telemetryExtras
+      )
         .then(id => { if (id) telemetryLogIdRef.current = id; });
     }, 100);
 
@@ -1835,9 +1895,19 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
       if (telemetryLogIdRef.current && encoderStartAtRef.current) {
         const duration = (Date.now() - encoderStartAtRef.current) / 1000;
-        void logStreamStop(telemetryLogIdRef.current, duration);
+        const telemetryExtras = {
+          reconnectCount: relayReconnectTotalRef.current,
+          uptimeMs: relayUptimeStartRef.current ? Date.now() - relayUptimeStartRef.current : undefined,
+          bindError: relayBindErrorRef.current,
+        };
+        void logStreamStop(telemetryLogIdRef.current, duration, telemetryExtras);
       }
-      void logStreamError(user.uid, user.email || 'unknown', streamSessionIdRef.current || 'unknown', reason);
+      const telemetryExtras = {
+        reconnectCount: relayReconnectTotalRef.current,
+        uptimeMs: relayUptimeStartRef.current ? Date.now() - relayUptimeStartRef.current : undefined,
+        bindError: relayBindErrorRef.current,
+      };
+      void logStreamError(user.uid, user.email || 'unknown', streamSessionIdRef.current || 'unknown', reason, telemetryExtras);
 
       telemetryLogIdRef.current = null;
       streamSessionIdRef.current = null;
