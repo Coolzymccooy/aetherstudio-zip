@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Camera, Mic, X, RefreshCw, Loader2 } from 'lucide-react';
 
 interface DeviceSelectorModalProps {
-  onSelect: (videoDeviceId: string, audioDeviceId: string, videoLabel: string) => void;
+  onSelect: (videoDeviceId: string, audioDeviceId: string, videoLabel: string, audioLabel?: string) => void;
   onClose: () => void;
 }
 
@@ -68,9 +68,12 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
   }, []);
 
   const handleConfirm = () => {
-    const label =
+    const videoLabel =
       videoDevices.find((d) => d.deviceId === selectedVideo)?.label ||
       `Camera ${selectedVideo.slice(0, 5)}...`;
+    const audioLabel = selectedAudio
+      ? (audioDevices.find((d) => d.deviceId === selectedAudio)?.label || `Mic ${selectedAudio.slice(0, 5)}...`)
+      : undefined;
 
     if (selectedOutput) {
       localStorage.setItem('aether_audio_output', selectedOutput);
@@ -78,7 +81,7 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
       window.dispatchEvent(new CustomEvent('aether:audio-output-change', { detail: { deviceId: selectedOutput } }));
     }
 
-    onSelect(selectedVideo, selectedAudio, label);
+    onSelect(selectedVideo, selectedAudio, videoLabel, audioLabel);
   };
 
   return (
@@ -175,6 +178,8 @@ export const DeviceSelectorModal: React.FC<DeviceSelectorModalProps> = ({ onSele
 
             <div className="bg-blue-500/10 border border-blue-500/20 rounded p-3 text-xs text-blue-200">
               <span className="font-bold">Audio Monitoring:</span> Selection here determines where you will hear the stream monitoring mix.
+              <br />
+              <span className="font-bold">Virtual Audio Cable:</span> Choose it under <strong>Audio Input</strong> when you want it sent to stream.
             </div>
           </div>
         )}

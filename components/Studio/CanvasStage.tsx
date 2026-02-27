@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Layer, SourceType } from '../../types';
 import { SelfieSegmentation } from "@mediapipe/selfie_segmentation";
 
@@ -39,7 +39,27 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
   const slideAnimRef = useRef<Map<string, number>>(new Map());
 
   const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
+  const layersRef = useRef<Layer[]>(safeLayers);
+  const selectedLayerIdRef = useRef<string | null>(selectedLayerId);
+  const isProRef = useRef<boolean>(isPro);
+  const transitionOverlayRef = useRef<typeof transitionOverlay>(transitionOverlay);
+
+  useEffect(() => {
+    layersRef.current = safeLayers;
+  }, [safeLayers]);
+
+  useEffect(() => {
+    selectedLayerIdRef.current = selectedLayerId;
+  }, [selectedLayerId]);
+
+  useEffect(() => {
+    isProRef.current = isPro;
+  }, [isPro]);
+
+  useEffect(() => {
+    transitionOverlayRef.current = transitionOverlay;
+  }, [transitionOverlay]);
 
   // --- AI Segmentation State ---
   const segmenterRef = useRef<SelfieSegmentation | null>(null);
@@ -185,7 +205,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
         const seg = segmenterRef.current;
         if (seg) {
           // Find layers needing segmentation
-          const layersToProcess = safeLayers.filter(l =>
+          const layersToProcess = layersRef.current.filter(l =>
             l.visible &&
             l.backgroundRemoval &&
             videoElementsRef.current.has(l.id)
@@ -223,7 +243,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
     requestAnimationFrame(loop);
     return () => { active = false; };
-  }, [safeLayers]);
+  }, []);
 
 
   // --- Interaction Handlers ---
@@ -236,7 +256,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     const clickX = (e.clientX - rect.left) * scaleX;
     const clickY = (e.clientY - rect.top) * scaleY;
 
-    const clickedLayer = [...safeLayers].sort((a, b) => b.zIndex - a.zIndex).find(layer => {
+    const clickedLayer = [...layersRef.current].sort((a, b) => b.zIndex - a.zIndex).find(layer => {
       if (!layer.visible) return false;
       const width = layer.width * (layer.style.scale || 1);
       const height = layer.height * (layer.style.scale || 1);
@@ -246,14 +266,15 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     if (clickedLayer) {
       onSelectLayer(clickedLayer.id);
       setIsDragging(true);
-      setDragOffset({ x: clickX - clickedLayer.x, y: clickY - clickedLayer.y });
+      const offset = { x: clickX - clickedLayer.x, y: clickY - clickedLayer.y };
+      dragOffsetRef.current = offset;
     } else {
       onSelectLayer(null);
     }
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging || !selectedLayerId) return;
+    if (!isDragging || !selectedLayerIdRef.current) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -261,13 +282,16 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     const scaleY = canvas.height / rect.height;
     const mouseX = (e.clientX - rect.left) * scaleX;
     const mouseY = (e.clientY - rect.top) * scaleY;
-    onUpdateLayer(selectedLayerId, { x: mouseX - dragOffset.x, y: mouseY - dragOffset.y });
+    onUpdateLayer(selectedLayerIdRef.current, {
+      x: mouseX - dragOffsetRef.current.x,
+      y: mouseY - dragOffsetRef.current.y,
+    });
   };
 
   const handleMouseUp = () => setIsDragging(false);
 
   // --- Main Draw Loop ---
-  const draw = () => {
+  const draw = useCallback(() => {
     const canvas = canvasRef.current;
     const osc = offscreenCanvasRef.current;
     if (!canvas || !osc) return;
@@ -280,7 +304,11 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // 2. Sort layers
-    const sortedLayers = [...safeLayers].sort((a, b) => a.zIndex - b.zIndex);
+    const currentLayers = layersRef.current;
+    const currentSelectedLayerId = selectedLayerIdRef.current;
+    const currentTransitionOverlay = transitionOverlayRef.current;
+    const currentIsPro = isProRef.current;
+    const sortedLayers = [...currentLayers].sort((a, b) => a.zIndex - b.zIndex);
 
     sortedLayers.forEach(layer => {
       if (!layer.visible) return;
@@ -449,7 +477,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       ctx.restore();
 
       // -- Selection Highlight --
-      if (selectedLayerId === layer.id) {
+      if (currentSelectedLayerId === layer.id) {
         ctx.save();
         ctx.strokeStyle = '#d946ef';
         ctx.lineWidth = 2;
@@ -469,7 +497,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     });
 
     // --- WATERMARK (Free Version) ---
-    if (!isPro) {
+    if (!currentIsPro) {
       ctx.save();
       const text = "AetherStudio Free";
       ctx.font = "bold 24px Inter, sans-serif";
@@ -482,23 +510,23 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       ctx.restore();
     }
 
-    if (transitionOverlay && transitionOverlay.alpha > 0) {
+    if (currentTransitionOverlay && currentTransitionOverlay.alpha > 0) {
       ctx.save();
-      ctx.globalAlpha = transitionOverlay.alpha;
-      ctx.fillStyle = transitionOverlay.color;
+      ctx.globalAlpha = currentTransitionOverlay.alpha;
+      ctx.fillStyle = currentTransitionOverlay.color;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.restore();
     }
 
     requestRef.current = requestAnimationFrame(draw);
-  };
+  }, []);
 
   useEffect(() => {
     requestRef.current = requestAnimationFrame(draw);
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [safeLayers, selectedLayerId, isDragging, dragOffset]);
+  }, [draw]);
 
   return (
     <div className="w-full h-full flex items-center justify-center bg-[#05010a] relative shadow-2xl overflow-hidden select-none">

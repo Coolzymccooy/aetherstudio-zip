@@ -33,7 +33,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
     },
     {
       q: "What is Composer Mode?",
-      a: "Composer Mode arranges your cameras into professional layouts. Choose from Main+Thumbs (big camera + small thumbnails), Split (50/50 side-by-side), PiP (main + small corner), or Grid (2x2). Toggle it on and click Apply.",
+      a: "Composer Mode arranges cameras deterministically: Main+Thumbs, Split, PiP, or Grid. Layouts honor a composed-camera cap for stability; extra cameras stay connected but can be hidden by layout rules.",
       k: ["composer", "layout", "thumbnails", "grid", "split", "pip", "side by side"],
     },
     {
@@ -48,12 +48,12 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
     },
     {
       q: "What transitions are available?",
-      a: "Three types: Cut (instant), Fade to Black, and Dip to White. Set the speed with preset buttons (Fast 150ms, Medium 300ms, Slow 600ms) or enter a custom duration. Use 'Preview' to test. Transitions apply when using Cut To Next or Auto-Director.",
+      a: "Three types: Cut, Fade to Black, and Dip to White. Speed can be Fast (150ms), Medium (300ms), Slow (600ms), or custom. Transitions apply to Scene Preset Load, Apply Layout, Cut To Next, and Auto-Director. Manual Main stays instant.",
       k: ["transition", "fade", "cut", "dip", "white", "black", "speed"],
     },
     {
       q: "How do Scene Presets work?",
-      a: "Save your current camera layout as a named preset. Choose a layout type, give it a name, and click Save. Load any preset to instantly restore that layout. You can also Duplicate presets for variations.",
+      a: "Save current layout as a preset with a template and optional main camera. Loading a template preset reliably restores that template; freeform presets restore stored positions. Duplicate creates editable variants.",
       k: ["scene", "preset", "save", "load", "recall", "duplicate"],
     },
     {
@@ -73,7 +73,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
     },
     {
       q: "Camera goes dark or black screen?",
-      a: "This was a known issue with transitions on Make Main. Make Main now switches instantly without any overlay. If you see darkness, click directly on the camera in the canvas. Also check that your transition mode is set to 'Cut' for instant switching.",
+      a: "If the canvas darkens, check transition mode and preset/layout switching flow. Manual Main is instant, while scene/layout transitions should finish by returning overlay alpha to zero. If darkness persists, run Transition Preview and re-apply layout.",
       k: ["dark", "black", "screen", "camera", "sleeping"],
     },
     {
@@ -200,6 +200,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
                 <h3 className="text-base font-bold text-white flex items-center gap-2"><Layers size={18} className="text-aether-400" /> Composer Mode</h3>
                 <div className="space-y-3 text-sm text-gray-300">
                   <p>Composer Mode arranges your cameras into professional broadcast layouts automatically.</p>
+                  <p className="text-xs text-gray-500">For stability, layouts respect a composed-camera cap. Extra cameras stay connected but may be hidden by layout rules.</p>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="bg-aether-800/40 rounded-lg p-3 border border-aether-700/50">
                       <p className="font-bold text-white mb-1">▣ Main + Thumbs</p>
@@ -268,7 +269,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
                     <p><strong className="text-white">Dip to White:</strong> Fades through white. Great for energetic or bright-themed shows.</p>
                   </div>
                   <p>Speed presets: <strong>Fast</strong> (150ms), <strong>Medium</strong> (300ms), <strong>Slow</strong> (600ms). Or enter a custom value.</p>
-                  <p className="text-xs text-gray-500">💡 Transitions apply to <strong>Cut To Next</strong> and <strong>Auto-Director</strong> switches. Make Main is always instant.</p>
+                  <p className="text-xs text-gray-500">Transitions apply to <strong>Load Preset</strong>, <strong>Apply Layout</strong>, <strong>Cut To Next</strong>, and <strong>Auto-Director</strong>. <strong>Make Main</strong> remains instant.</p>
                 </div>
               </section>
             )}
@@ -281,7 +282,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
                   <p>Save and restore camera layouts. Great for switching between "interview mode" and "presentation mode" during a show.</p>
                   <div className="bg-aether-800/40 rounded-lg p-3 space-y-2 border border-aether-700/50">
                     <p><strong className="text-white">Save:</strong> Name your current layout and click Save. All camera positions are stored.</p>
-                    <p><strong className="text-white">Load:</strong> Click Load to restore a saved layout (uses your current transition).</p>
+                    <p><strong className="text-white">Load:</strong> Click Load to restore that preset deterministically using your current transition.</p>
                     <p><strong className="text-white">Duplicate:</strong> Creates a copy of a preset for variations.</p>
                   </div>
                 </div>

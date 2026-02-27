@@ -16,6 +16,7 @@ import { verifyLicenseKey, issueLicenseKey } from '../../services/licenseService
 import { signOut, User } from 'firebase/auth';
 import { logStreamStart, logStreamStop, logStreamError } from '../../services/telemetryService';
 import { generateRoomId, getCleanPeerId } from '../../utils/peerId';
+import { computeComposerLayout, computeTransitionAlpha, type ComposerLayoutTemplate } from './composerLayout';
 import Peer, { DataConnection, MediaConnection } from "peerjs";
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -33,6 +34,69 @@ const MAX_COMPOSED_CAMERAS = (() => {
   if (!Number.isFinite(raw) || raw < 1) return 4;
   return Math.floor(raw);
 })();
+
+type ScenePreset = {
+  id: string;
+  name: string;
+  layout: ComposerLayoutTemplate;
+  mainLayerId?: string | null;
+  positions: Array<{ layerId: string; x: number; y: number; width: number; height: number; zIndex: number }>;
+  composerMode?: boolean;
+  transitionMode?: string;
+  version?: number;
+  cameraOrder?: string[];
+};
+
+const normalizeScenePreset = (raw: any): ScenePreset | null => {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = String(raw.id || '').trim();
+  if (!id) return null;
+
+  const allowedLayouts: ComposerLayoutTemplate[] = [
+    'freeform',
+    'main_thumbs',
+    'grid_2x2',
+    'side_by_side',
+    'pip_corner',
+  ];
+  const layout: ComposerLayoutTemplate = allowedLayouts.includes(raw.layout)
+    ? raw.layout
+    : 'freeform';
+
+  const positions = Array.isArray(raw.positions)
+    ? raw.positions
+      .map((p: any) => ({
+        layerId: String(p?.layerId || '').trim(),
+        x: Number(p?.x || 0),
+        y: Number(p?.y || 0),
+        width: Number(p?.width || 0),
+        height: Number(p?.height || 0),
+        zIndex: Number(p?.zIndex || 0),
+      }))
+      .filter((p: any) => !!p.layerId)
+    : [];
+
+  const cameraOrder = Array.isArray(raw.cameraOrder)
+    ? raw.cameraOrder.map((id: unknown) => String(id || '').trim()).filter(Boolean)
+    : undefined;
+
+  return {
+    id,
+    name: String(raw.name || 'Scene').trim() || 'Scene',
+    layout,
+    mainLayerId: raw.mainLayerId ? String(raw.mainLayerId) : null,
+    positions,
+    composerMode: typeof raw.composerMode === 'boolean' ? raw.composerMode : undefined,
+    transitionMode: typeof raw.transitionMode === 'string' ? raw.transitionMode : undefined,
+    version: Number(raw.version || 1),
+    cameraOrder,
+  };
+};
+
+const normalizeScenePresets = (raw: unknown): ScenePreset[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(normalizeScenePreset).filter((p): p is ScenePreset => !!p);
+};
 
 interface StudioProps {
   user: User;
@@ -268,25 +332,16 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     }
   });
 
-  type ScenePreset = {
-    id: string;
-    name: string;
-    layout: 'freeform' | 'main_thumbs' | 'grid_2x2' | 'side_by_side' | 'pip_corner';
-    mainLayerId?: string | null;
-    positions: Array<{ layerId: string; x: number; y: number; width: number; height: number; zIndex: number }>;
-    composerMode?: boolean;
-    transitionMode?: string;
-  };
   const [scenePresets, setScenePresets] = useState<ScenePreset[]>(() => {
     try {
       const raw = localStorage.getItem('aether_scene_presets');
-      return raw ? JSON.parse(raw) : [];
+      return raw ? normalizeScenePresets(JSON.parse(raw)) : [];
     } catch {
       return [];
     }
   });
   const [presetName, setPresetName] = useState('Main + Thumbs');
-  const [layoutTemplate, setLayoutTemplate] = useState<'freeform' | 'main_thumbs' | 'grid_2x2' | 'side_by_side' | 'pip_corner'>('main_thumbs');
+  const [layoutTemplate, setLayoutTemplate] = useState<ComposerLayoutTemplate>('main_thumbs');
 
   const [transitionMode, setTransitionMode] = useState<'cut' | 'fade' | 'dip_white'>(() => {
     return (localStorage.getItem('aether_transition_mode') as any) || 'cut';
@@ -348,8 +403,16 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const audioSources = useRef<Map<string, MediaStreamAudioSourceNode>>(new Map());
   const audioGains = useRef<Map<string, GainNode>>(new Map());
   const audioFilters = useRef<Map<string, BiquadFilterNode>>(new Map());
+  const audioCompressors = useRef<Map<string, DynamicsCompressorNode>>(new Map());
   const hyperGateNodes = useRef<Map<string, { input: GainNode; hp: BiquadFilterNode; analyser: AnalyserNode; gate: GainNode; }>>(new Map());
   const hyperGateState = useRef<Map<string, { isOpen: boolean; lastAboveMs: number; lastDb: number; }>>(new Map());
+  const masterMixInput = useRef<GainNode | null>(null);
+  const masterHighPass = useRef<BiquadFilterNode | null>(null);
+  const masterPresence = useRef<BiquadFilterNode | null>(null);
+  const masterAir = useRef<BiquadFilterNode | null>(null);
+  const masterCompressor = useRef<DynamicsCompressorNode | null>(null);
+  const masterLimiter = useRef<DynamicsCompressorNode | null>(null);
+  const masterOutputGain = useRef<GainNode | null>(null);
   const masterMonitorGain = useRef<GainNode | null>(null);
   const audioMonitoringNodes = useRef<Map<string, GainNode>>(new Map());
 
@@ -370,6 +433,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const liveIntentRef = useRef<boolean>(false);
   const liveStartGuardRef = useRef<number>(0);
   const transitionRafRef = useRef<number | null>(null);
+  const transitionTokenRef = useRef<number>(0);
+  const layoutTemplateRef = useRef<ComposerLayoutTemplate>(layoutTemplate);
+  const hiddenByLayoutRef = useRef<number>(0);
   const streamHealthRef = useRef<{ bytes: number; drops: number; lastTs: number }>({ bytes: 0, drops: 0, lastTs: Date.now() });
   const streamHealthTimerRef = useRef<number | null>(null);
   const relayPingTimerRef = useRef<number | null>(null);
@@ -404,6 +470,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   useEffect(() => {
     cameraSourcesRef.current = cameraSources;
   }, [cameraSources]);
+
+  useEffect(() => {
+    layoutTemplateRef.current = layoutTemplate;
+  }, [layoutTemplate]);
 
   const handleSettingsDrag = useCallback((e: MouseEvent) => {
     const drag = settingsDragRef.current;
@@ -760,6 +830,49 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       masterMonitorGain.current = audioContext.current.createGain();
       masterMonitorGain.current.connect(audioContext.current.destination);
 
+      // Master stream bus: subtle voice polish + compressor/limiter for stable output.
+      masterMixInput.current = audioContext.current.createGain();
+      masterHighPass.current = audioContext.current.createBiquadFilter();
+      masterHighPass.current.type = 'highpass';
+      masterHighPass.current.frequency.value = 55;
+      masterHighPass.current.Q.value = 0.707;
+
+      masterPresence.current = audioContext.current.createBiquadFilter();
+      masterPresence.current.type = 'peaking';
+      masterPresence.current.frequency.value = 2800;
+      masterPresence.current.Q.value = 0.9;
+      masterPresence.current.gain.value = 1.8;
+
+      masterAir.current = audioContext.current.createBiquadFilter();
+      masterAir.current.type = 'highshelf';
+      masterAir.current.frequency.value = 7600;
+      masterAir.current.gain.value = 1.2;
+
+      masterCompressor.current = audioContext.current.createDynamicsCompressor();
+      masterCompressor.current.threshold.value = -18;
+      masterCompressor.current.knee.value = 18;
+      masterCompressor.current.ratio.value = 3;
+      masterCompressor.current.attack.value = 0.004;
+      masterCompressor.current.release.value = 0.16;
+
+      masterLimiter.current = audioContext.current.createDynamicsCompressor();
+      masterLimiter.current.threshold.value = -3.5;
+      masterLimiter.current.knee.value = 0;
+      masterLimiter.current.ratio.value = 20;
+      masterLimiter.current.attack.value = 0.0015;
+      masterLimiter.current.release.value = 0.08;
+
+      masterOutputGain.current = audioContext.current.createGain();
+      masterOutputGain.current.gain.value = 1.03;
+
+      masterMixInput.current.connect(masterHighPass.current);
+      masterHighPass.current.connect(masterPresence.current);
+      masterPresence.current.connect(masterAir.current);
+      masterAir.current.connect(masterCompressor.current);
+      masterCompressor.current.connect(masterLimiter.current);
+      masterLimiter.current.connect(masterOutputGain.current);
+      masterOutputGain.current.connect(audioDestination.current);
+
       // Apply initial sinkId if supported
       if (outputDeviceId && (audioContext.current as any).setSinkId) {
         (audioContext.current as any).setSinkId(outputDeviceId).catch(() => { });
@@ -768,7 +881,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     const ctx = audioContext.current;
     const dest = audioDestination.current;
     const monitorMaster = masterMonitorGain.current;
-    if (!ctx || !dest || !monitorMaster) return;
+    const mixInput = masterMixInput.current;
+    if (!ctx || !dest || !monitorMaster || !mixInput) return;
 
     // Update Master Monitor Volume
     monitorMaster.gain.setTargetAtTime(masterMonitorVolume / 100, ctx.currentTime, 0.05);
@@ -780,13 +894,16 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         audioSources.current.get(id)?.disconnect();
         audioGains.current.get(id)?.disconnect();
         audioFilters.current.get(id)?.disconnect();
+        audioCompressors.current.get(id)?.disconnect();
         audioMonitoringNodes.current.get(id)?.disconnect();
 
         audioSources.current.delete(id);
         audioGains.current.delete(id);
         audioFilters.current.delete(id);
+        audioCompressors.current.delete(id);
         audioMonitoringNodes.current.delete(id);
         hyperGateNodes.current.delete(id);
+        hyperGateState.current.delete(id);
       }
     });
 
@@ -803,12 +920,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
         // Filter & Gain
         const filter = ctx.createBiquadFilter();
+        const compressor = ctx.createDynamicsCompressor();
         const gain = ctx.createGain();
         const monitorGain = ctx.createGain();
+        applyTrackTone(filter, compressor, track.isMic);
 
         hg.gate.connect(filter);
-        filter.connect(gain);
-        gain.connect(dest);
+        filter.connect(compressor);
+        compressor.connect(gain);
+        gain.connect(mixInput);
 
         // Monitoring path
         gain.connect(monitorGain);
@@ -820,8 +940,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         audioSources.current.set(track.id, source);
         audioGains.current.set(track.id, gain);
         audioFilters.current.set(track.id, filter);
+        audioCompressors.current.set(track.id, compressor);
         audioMonitoringNodes.current.set(track.id, monitorGain);
         hyperGateNodes.current.set(track.id, hg);
+      }
+
+      const filterNode = audioFilters.current.get(track.id);
+      const compressorNode = audioCompressors.current.get(track.id);
+      if (filterNode && compressorNode) {
+        applyTrackTone(filterNode, compressorNode, track.isMic);
       }
 
       const gainNode = audioGains.current.get(track.id);
@@ -851,20 +978,32 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       const now = Date.now();
       hyperGateNodes.current.forEach((nodes, trackId) => {
         const track = audioTracks.find(t => t.id === trackId);
-        if (!track || !track.noiseCancellation) return;
-
         const st = hyperGateState.current.get(trackId) || { isOpen: true, lastAboveMs: now, lastDb: -120 };
+        if (!track) return;
+
+        if (!track.noiseCancellation) {
+          if (!st.isOpen) {
+            nodes.gate.gain.setTargetAtTime(1, ctx.currentTime, 0.03);
+            st.isOpen = true;
+          }
+          st.lastAboveMs = now;
+          st.lastDb = -120;
+          hyperGateState.current.set(trackId, st);
+          return;
+        }
+
         const db = rmsDbFromAnalyser(nodes.analyser);
         st.lastDb = db;
 
-        const thresholdDb = -45;
-        const holdMs = 220;
+        const openThresholdDb = -50;
+        const closeThresholdDb = -56;
+        const holdMs = 320;
         const openGain = 1.0;
-        const closedGain = 0.03;
-        const attack = 0.02;
-        const release = 0.10;
+        const closedGain = 0.18;
+        const attack = 0.03;
+        const release = 0.20;
 
-        if (db > thresholdDb) {
+        if (db > openThresholdDb) {
           st.lastAboveMs = now;
           if (!st.isOpen) {
             nodes.gate.gain.setTargetAtTime(openGain, ctx.currentTime, attack);
@@ -872,7 +1011,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
           }
         } else {
           const since = now - st.lastAboveMs;
-          if (since > holdMs && st.isOpen) {
+          if (since > holdMs && st.isOpen && db < closeThresholdDb) {
             nodes.gate.gain.setTargetAtTime(closedGain, ctx.currentTime, release);
             st.isOpen = false;
           }
@@ -1274,6 +1413,20 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   }, [roomId]); // Re-run if room ID changes
 
   // --- HELPER FUNCTIONS ---
+  const buildPreferredAudioConstraints = (deviceId?: string): MediaTrackConstraints => {
+    const constraints: MediaTrackConstraints = {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: { ideal: 2 },
+      sampleRate: { ideal: 48000 },
+      sampleSize: { ideal: 16 },
+    };
+    if (deviceId) {
+      constraints.deviceId = { exact: deviceId };
+    }
+    return constraints;
+  };
 
   const handleMobileStream = (stream: MediaStream, sourceId: string, label: string, peerId?: string) => {
     const existingSource = cameraSourcesRef.current.find(s => s.id === sourceId);
@@ -1352,13 +1505,20 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     setStatusMsg({ type: 'info', text: "New Room ID Generated." });
   };
 
-  const addCameraSource = async (videoDeviceId: string, audioDeviceId: string, videoLabel: string) => {
+  const addCameraSource = async (videoDeviceId: string, audioDeviceId: string, videoLabel: string, audioLabel?: string) => {
     try {
-      const audioConstraint = audioDeviceId ? { deviceId: { exact: audioDeviceId } } : false;
+      const audioConstraint = audioDeviceId
+        ? buildPreferredAudioConstraints(audioDeviceId)
+        : false;
       const attempts: MediaStreamConstraints[] = [
         { video: { deviceId: { exact: videoDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: audioConstraint },
         { video: { deviceId: { exact: videoDeviceId } }, audio: audioConstraint },
-        { video: true, audio: audioConstraint },
+        {
+          video: true,
+          audio: audioDeviceId
+            ? { deviceId: { exact: audioDeviceId } }
+            : audioConstraint,
+        },
       ];
 
       let stream: MediaStream | null = null;
@@ -1381,7 +1541,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       let audioTrackId: string | undefined;
       if (stream.getAudioTracks().length > 0) {
         audioTrackId = generateId();
-        setAudioTracks(prev => [...prev, { id: audioTrackId!, label: `${videoLabel || 'Cam'} Mic`, volume: 100, muted: false, isMic: true, noiseCancellation: false, stream }]);
+        const trackLabel = audioLabel || `${videoLabel || 'Cam'} Mic`;
+        setAudioTracks(prev => [...prev, { id: audioTrackId!, label: trackLabel, volume: 100, muted: false, isMic: true, noiseCancellation: false, stream }]);
       }
       const sourceId = generateId();
       setCameraSources(prev => [
@@ -2483,7 +2644,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     });
     setSelectedLayerId(layerId);
     if (composerMode) {
-      setTimeout(() => applyComposerLayout(layerId), 0);
+      applyComposerLayoutState(layerId);
     }
   };
 
@@ -2630,6 +2791,78 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     setDestinations(prev => prev.filter(d => d.id !== id));
   };
 
+  const resolveOrderedCameraLayerIds = useCallback((overrideOrder?: string[]) => {
+    const fromSources = cameraSourcesRef.current
+      .map((source) => source.layerId)
+      .filter((layerId): layerId is string => !!layerId);
+    if (!Array.isArray(overrideOrder) || overrideOrder.length === 0) return fromSources;
+
+    const uniqueOverride = Array.from(new Set(overrideOrder.map((id) => String(id || '').trim()).filter(Boolean)));
+    const prioritized = uniqueOverride.filter((id) => fromSources.includes(id));
+    const remaining = fromSources.filter((id) => !prioritized.includes(id));
+    return [...prioritized, ...remaining];
+  }, []);
+
+  const applyComposerLayoutState = useCallback((
+    mainOverride?: string | null,
+    layoutOverride?: ComposerLayoutTemplate,
+    cameraOrderOverride?: string[]
+  ) => {
+    const effectiveTemplate = layoutOverride || layoutTemplateRef.current;
+    if (effectiveTemplate === 'freeform') return;
+
+    const cameraLayerIds = resolveOrderedCameraLayerIds(cameraOrderOverride);
+    if (cameraLayerIds.length === 0) return;
+
+    const result = computeComposerLayout({
+      layoutTemplate: effectiveTemplate,
+      cameraLayerIds,
+      selectedMainLayerId: mainOverride || selectedLayerId,
+      cameraOrderOverride,
+      canvasWidth: 1920,
+      canvasHeight: 1080,
+      maxComposedCameras: MAX_COMPOSED_CAMERAS,
+    });
+
+    if (result.resolvedMainLayerId && result.resolvedMainLayerId !== selectedLayerId) {
+      setSelectedLayerId(result.resolvedMainLayerId);
+    }
+
+    const placementById = result.placements;
+    const cameraSet = new Set(cameraLayerIds);
+    setLayers((prev) =>
+      prev.map((layer) => {
+        if (!cameraSet.has(layer.id)) return layer;
+        const placement = placementById[layer.id];
+        if (!placement) return { ...layer, visible: false };
+
+        return {
+          ...layer,
+          x: placement.x,
+          y: placement.y,
+          width: placement.width,
+          height: placement.height,
+          zIndex: placement.zIndex,
+          visible: placement.visible,
+          style: placement.styleAdjustments
+            ? { ...layer.style, ...placement.styleAdjustments }
+            : layer.style,
+        };
+      })
+    );
+
+    if (result.hiddenLayerIds.length !== hiddenByLayoutRef.current) {
+      hiddenByLayoutRef.current = result.hiddenLayerIds.length;
+      if (result.hiddenLayerIds.length > 0) {
+        const hiddenCount = result.hiddenLayerIds.length;
+        setStatusMsg({
+          type: 'info',
+          text: `${hiddenCount} camera${hiddenCount > 1 ? 's are' : ' is'} hidden by layout cap.`,
+        });
+      }
+    }
+  }, [resolveOrderedCameraLayerIds, selectedLayerId]);
+
   const saveScenePreset = () => {
     const positions = layers.map(l => ({
       layerId: l.id,
@@ -2647,6 +2880,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         layout: layoutTemplate,
         mainLayerId: selectedLayerId,
         positions,
+        version: 2,
+        cameraOrder: resolveOrderedCameraLayerIds(),
       }
     ]);
     setStatusMsg({ type: 'info', text: 'Scene preset saved.' });
@@ -2655,21 +2890,32 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const loadScenePresetById = (id: string) => {
     const preset = scenePresets.find(p => p.id === id);
     if (!preset) return;
-    if (preset.layout === 'main_thumbs') {
-      setComposerMode(true);
-      setSelectedLayerId(preset.mainLayerId || selectedLayerId);
-      setTimeout(() => applyComposerLayout(preset.mainLayerId || selectedLayerId), 0);
-    } else if (preset.layout === 'grid_2x2') {
+
+    if (preset.layout === 'freeform') {
       setComposerMode(false);
-      applyGridLayout();
-    } else {
-      setComposerMode(false);
+      setLayoutTemplate('freeform');
       setLayers(prev => prev.map(l => {
         const pos = preset.positions.find(p => p.layerId === l.id);
         if (!pos) return l;
-        return { ...l, x: pos.x, y: pos.y, width: pos.width, height: pos.height, zIndex: pos.zIndex };
+        return {
+          ...l,
+          x: pos.x,
+          y: pos.y,
+          width: pos.width,
+          height: pos.height,
+          zIndex: pos.zIndex,
+          visible: true,
+        };
       }));
+      hiddenByLayoutRef.current = 0;
+    } else {
+      const mainLayerId = preset.mainLayerId || selectedLayerId || null;
+      setComposerMode(true);
+      setLayoutTemplate(preset.layout);
+      if (mainLayerId) setSelectedLayerId(mainLayerId);
+      applyComposerLayoutState(mainLayerId, preset.layout, preset.cameraOrder);
     }
+
     setStatusMsg({ type: 'info', text: `Loaded preset: ${preset.name}` });
   };
 
@@ -2688,71 +2934,18 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   };
 
 
-  const applyComposerLayout = (mainOverride?: string | null) => {
-    const CAM_W = 1920;
-    const CAM_H = 1080;
-    const THUMB_W = 320;
-    const THUMB_H = 180;
-    const PAD = 16;
-
-    const sourcesWithLayers = cameraSources.filter(s => s.layerId);
-    if (sourcesWithLayers.length === 0) return;
-
-    const mainLayerId =
-      mainOverride ||
-      selectedLayerId ||
-      sourcesWithLayers[0].layerId;
-
-    const currentLayout = layoutTemplate;
-
-    setLayers(prev => {
-      const base = prev.map(l => ({ ...l }));
-
-      if (currentLayout === 'side_by_side') {
-        // Two cameras side by side (50/50)
-        const targets = sourcesWithLayers.slice(0, 2);
-        return base.map(l => {
-          const idx = targets.findIndex(s => s.layerId === l.id);
-          if (idx === -1) { const src = sourcesWithLayers.find(s => s.layerId === l.id); if (!src) return l; return { ...l, visible: false }; }
-          return { ...l, x: idx * (CAM_W / 2), y: 0, width: CAM_W / 2, height: CAM_H, zIndex: 100 + idx, visible: true };
-        });
-      }
-
-      if (currentLayout === 'pip_corner') {
-        // Main full-screen, secondary as small PiP bottom-right
-        const PIP_W = 320; const PIP_H = 180; const PIP_PAD = 24;
-        let pipIdx = 0;
-        return base.map(l => {
-          const src = sourcesWithLayers.find(s => s.layerId === l.id);
-          if (!src) return l;
-          if (l.id === mainLayerId) return { ...l, x: 0, y: 0, width: CAM_W, height: CAM_H, zIndex: 100, visible: true };
-          const x = CAM_W - PIP_W - PIP_PAD;
-          const y = CAM_H - PIP_H - PIP_PAD - pipIdx * (PIP_H + 8);
-          pipIdx++;
-          return { ...l, x, y, width: PIP_W, height: PIP_H, zIndex: 200 + pipIdx, visible: true, style: { ...l.style, rounded: 12 } };
-        });
-      }
-
-      // Default: main_thumbs
-      let thumbIdx = 0;
-      return base.map(l => {
-        const src = sourcesWithLayers.find(s => s.layerId === l.id);
-        if (!src) return l;
-        if (l.id === mainLayerId) return { ...l, x: 0, y: 0, width: CAM_W, height: CAM_H, zIndex: 100 };
-        const x = CAM_W - THUMB_W - PAD;
-        const y = PAD + thumbIdx * (THUMB_H + PAD);
-        thumbIdx += 1;
-        return { ...l, x, y, width: THUMB_W, height: THUMB_H, zIndex: 50 + thumbIdx };
-      });
-    });
-  };
+  const cameraLayerSignature = cameraSources
+    .map((source) => source.layerId || '')
+    .filter(Boolean)
+    .join('|');
 
   useEffect(() => {
-    if (composerMode) {
-      applyComposerLayout();
+    if (!composerMode || layoutTemplate === 'freeform') {
+      hiddenByLayoutRef.current = 0;
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [composerMode, cameraSources.length, selectedLayerId]);
+    applyComposerLayoutState();
+  }, [composerMode, layoutTemplate, cameraLayerSignature, selectedLayerId, applyComposerLayoutState]);
 
   const cutToNext = () => {
     if (cameraSources.length === 0) return;
@@ -2770,60 +2963,54 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     if (wide) makeMain(wide.layerId);
   };
 
-  const applyGridLayout = () => {
-    const targets = cameraSources.filter(s => s.layerId).map(s => s.layerId as string).slice(0, 4);
-    if (targets.length === 0) return;
-    const CAM_W = 1920;
-    const CAM_H = 1080;
-    const cols = 2;
-    const rows = 2;
-    const cellW = CAM_W / cols;
-    const cellH = CAM_H / rows;
-    setLayers(prev => prev.map(l => {
-      const idx = targets.indexOf(l.id);
-      if (idx === -1) return l;
-      const col = idx % cols;
-      const row = Math.floor(idx / cols);
-      return {
-        ...l,
-        x: col * cellW,
-        y: row * cellH,
-        width: cellW,
-        height: cellH,
-        zIndex: 100 + idx,
-      };
-    }));
-  };
-
   const runTransition = (action: () => void) => {
     if (transitionMode === 'cut' || transitionMs <= 0) {
+      if (transitionRafRef.current) {
+        cancelAnimationFrame(transitionRafRef.current);
+        transitionRafRef.current = null;
+      }
+      transitionTokenRef.current += 1;
+      setTransitionAlpha(0);
       action();
       return;
     }
+
+    transitionTokenRef.current += 1;
+    const token = transitionTokenRef.current;
+    setTransitionAlpha(0);
+
     if (transitionRafRef.current) {
       cancelAnimationFrame(transitionRafRef.current);
+      transitionRafRef.current = null;
     }
+
     const duration = Math.max(120, transitionMs);
     const half = duration / 2;
     const start = performance.now();
     let switched = false;
 
     const step = (now: number) => {
+      if (token !== transitionTokenRef.current) {
+        setTransitionAlpha(0);
+        return;
+      }
       const t = now - start;
-      if (t < half) {
-        setTransitionAlpha(t / half);
-      } else {
-        if (!switched) {
-          action();
-          switched = true;
-        }
-        const down = 1 - (t - half) / half;
-        setTransitionAlpha(Math.max(0, down));
+      if (t < duration) {
+        setTransitionAlpha(computeTransitionAlpha(t, duration));
+      }
+
+      if (t >= half && !switched) {
+        action();
+        switched = true;
       }
 
       if (t < duration) {
         transitionRafRef.current = requestAnimationFrame(step);
       } else {
+        if (token !== transitionTokenRef.current) {
+          setTransitionAlpha(0);
+          return;
+        }
         setTransitionAlpha(0);
         transitionRafRef.current = null;
       }
@@ -2831,6 +3018,16 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
     transitionRafRef.current = requestAnimationFrame(step);
   };
+
+  useEffect(() => {
+    return () => {
+      transitionTokenRef.current += 1;
+      if (transitionRafRef.current) {
+        cancelAnimationFrame(transitionRafRef.current);
+        transitionRafRef.current = null;
+      }
+    };
+  }, []);
 
   // --- Transition overlay color (passed to CanvasStage) ---
   const transitionColor = transitionMode === 'dip_white' ? '#ffffff' : '#000000';
@@ -2858,7 +3055,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         const others = cameraSources.filter(s => s.layerId && s.layerId !== selectedLayerId);
         if (others.length > 0) {
           const pick = others[Math.floor(Math.random() * others.length)];
-          makeMain(pick.layerId);
+          runTransition(() => makeMain(pick.layerId));
         } else {
           cutToNext();
         }
@@ -2874,7 +3071,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
           if (db > bestDb) { bestDb = db; bestLayerId = s.layerId; }
         });
         if (bestLayerId && bestLayerId !== selectedLayerId) {
-          makeMain(bestLayerId);
+          runTransition(() => makeMain(bestLayerId));
         }
       } else {
         cutToNext();
@@ -2947,12 +3144,37 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     }
   };
 
+  function applyTrackTone(filter: BiquadFilterNode, compressor: DynamicsCompressorNode, isMic: boolean) {
+    if (isMic) {
+      // Speech-first profile for better intelligibility.
+      filter.type = 'highshelf';
+      filter.frequency.value = 4200;
+      filter.gain.value = 2.5;
+      compressor.threshold.value = -24;
+      compressor.knee.value = 20;
+      compressor.ratio.value = 3.2;
+      compressor.attack.value = 0.004;
+      compressor.release.value = 0.16;
+      return;
+    }
+
+    // Preserve external processed feeds (mixers, virtual cables) with near-neutral shaping.
+    filter.type = 'allpass';
+    filter.frequency.value = 1000;
+    filter.gain.value = 0;
+    compressor.threshold.value = -15;
+    compressor.knee.value = 24;
+    compressor.ratio.value = 2;
+    compressor.attack.value = 0.003;
+    compressor.release.value = 0.2;
+  }
+
   function createHyperGateChain(ctx: AudioContext) {
     const input = ctx.createGain();
     input.gain.value = 1;
     const hp = ctx.createBiquadFilter();
     hp.type = "highpass";
-    hp.frequency.value = 120;
+    hp.frequency.value = 70;
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.85;
@@ -3029,10 +3251,22 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   key={m.deviceId}
                   onClick={async () => {
                     try {
-                      const s = await navigator.mediaDevices.getUserMedia({
-                        audio: { deviceId: { exact: m.deviceId } },
-                        video: false
-                      });
+                      const candidates: (MediaTrackConstraints | boolean)[] = [
+                        buildPreferredAudioConstraints(m.deviceId),
+                        { deviceId: { exact: m.deviceId } },
+                        true,
+                      ];
+                      let s: MediaStream | null = null;
+                      for (const audioConstraints of candidates) {
+                        try {
+                          s = await navigator.mediaDevices.getUserMedia({
+                            audio: audioConstraints,
+                            video: false,
+                          });
+                          break;
+                        } catch { }
+                      }
+                      if (!s) throw new Error('mic_switch_failed');
                       setAudioTracks(prev => prev.map(t => t.id === micPickerTrackId ? { ...t, stream: s } : t));
                       setMicPickerTrackId(null);
                       setStatusMsg({ type: "info", text: "Microphone switched." });
@@ -3289,7 +3523,18 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       { id: 'pip_corner' as const, label: 'PiP', icon: '◲' },
                       { id: 'grid_2x2' as const, label: 'Grid', icon: '⊞' },
                     ].map(lt => (
-                      <button key={lt.id} onClick={() => { setLayoutTemplate(lt.id); if (composerMode) setTimeout(() => applyComposerLayout(), 0); }}
+                      <button
+                        key={lt.id}
+                        onClick={() => {
+                          if (composerMode) {
+                            runTransition(() => {
+                              setLayoutTemplate(lt.id);
+                              applyComposerLayoutState(selectedLayerId || null, lt.id);
+                            });
+                          } else {
+                            setLayoutTemplate(lt.id);
+                          }
+                        }}
                         className={`flex flex-col items-center gap-0.5 p-2 rounded-lg border text-xs transition-all ${layoutTemplate === lt.id ? 'border-aether-500 bg-aether-700/40 text-white' : 'border-aether-700 bg-aether-800/30 text-gray-400 hover:border-aether-600'
                           }`}
                       >
@@ -3298,7 +3543,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       </button>
                     ))}
                   </div>
-                  <button onClick={() => applyComposerLayout()} className="section-btn section-btn-primary w-full">Apply Layout</button>
+                  <button
+                    onClick={() => runTransition(() => applyComposerLayoutState())}
+                    className="section-btn section-btn-primary w-full"
+                  >
+                    Apply Layout
+                  </button>
                 </CollapsibleSection>
 
                 {/* ─── AUTO-DIRECTOR ─── */}

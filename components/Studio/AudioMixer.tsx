@@ -222,6 +222,16 @@ export const AudioMixer: React.FC<AudioMixerProps> = ({
                 </div>
 
                 <div className="flex gap-0.5 shrink-0">
+                  <button
+                    onClick={() => onUpdateTrack(track.id, { noiseCancellation: !track.noiseCancellation })}
+                    className={`p-1 rounded-md border transition-all ${track.noiseCancellation
+                      ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                      : 'bg-black/30 border-aether-700/50 text-gray-600 hover:text-gray-400'
+                      }`}
+                    title="Noise Cancellation"
+                  >
+                    <Sparkles size={12} />
+                  </button>
                   <button onClick={() => onUpdateTrack(track.id, { monitoring: !track.monitoring })}
                     className={`p-1 rounded-md border transition-all ${track.monitoring ? 'bg-blue-500/20 border-blue-500/40 text-blue-400' : 'bg-black/30 border-aether-700/50 text-gray-600 hover:text-gray-400'
                       }`} title="Monitor">
