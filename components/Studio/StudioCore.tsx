@@ -1380,6 +1380,27 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
               }
               setRelayStatus(`Relay error: ${errorCode}`);
             }
+
+            // Handle Lumina Control Bridge Events
+            if (msg?.type === "lumina_event") {
+              const { event, payload } = msg;
+              if (event === "lumina.scene.switch") {
+                const targetScene = payload?.sceneName || payload?.target;
+                if (targetScene && activeComposerScene?.name !== targetScene) {
+                  const preset = composerScenes.find((s) => s.name?.toLowerCase() === targetScene?.toLowerCase());
+                  if (preset) {
+                    handleSceneSelect(preset.id);
+                    setStatusMsg({ type: "info", text: `Lumina Scene Transition: ${preset.name}` });
+                  } else {
+                    setStatusMsg({ type: "warn", text: `Lumina req scene '${targetScene}' not found in composition.` });
+                  }
+                }
+              } else if (event === "lumina.state.sync") {
+                // Optional: visual indicator that lumina is synced
+                // setStatusMsg({ type: "info", text: "Lumina Auto-Sync active." });
+              }
+            }
+
           } catch { }
         };
       } catch {

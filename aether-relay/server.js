@@ -619,6 +619,58 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/bridge/event" && req.method === "POST") {
+    const eventType = req.headers["x-lumina-event"];
+    const workspaceId = req.headers["x-lumina-workspace"];
+    const sessionId = req.headers["x-lumina-session"];
+    const token = req.headers["x-lumina-token"];
+
+    if (!eventType || !workspaceId || !sessionId) {
+      sendJson(400, { ok: false, message: "missing_required_headers" });
+      return;
+    }
+
+    if (RELAY_TOKEN && token !== RELAY_TOKEN) {
+      sendJson(401, { ok: false, message: "unauthorized" });
+      return;
+    }
+
+    if (eventType === "lumina.bridge.ping") {
+      sendJson(200, { ok: true, message: "accepted" });
+      return;
+    }
+
+    const chunks = [];
+    req.on("data", (d) => chunks.push(d));
+    req.on("end", () => {
+      try {
+        const raw = Buffer.concat(chunks).toString("utf8") || "{}";
+        const payload = JSON.parse(raw);
+
+        const bridgeEvent = {
+          type: "lumina_event",
+          event: eventType,
+          workspaceId,
+          sessionId,
+          payload,
+          ts: Date.now(),
+        };
+
+        // Broadcast to all connected Aether WebSockets
+        wss.clients.forEach((client) => {
+          if (client.readyState === 1 /* WebSocket.OPEN */) {
+            safeSendWs(client, bridgeEvent);
+          }
+        });
+
+        sendJson(200, { ok: true, message: "accepted" });
+      } catch (e) {
+        sendJson(400, { ok: false, message: "invalid_json_payload" });
+      }
+    });
+    return;
+  }
+
   res.writeHead(404, { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" });
   res.end("not found");
 });

@@ -483,3 +483,93 @@ If you want me to continue with **Stripe integration** or **mobile layout upgrad
 - `git push origin master --tags`: Successfully triggered CI/CD and Electron publish.
 - Message Flow Verification: Confirmed end-to-end delivery from Mobile (Audience Mode) to Studio Queue.
 - Release: v0.1.4 is now live.
+
+---
+
+## Update (2026-02-27) - Composer Stabilization + Audio Clarity + Desktop Release (v0.1.8)
+
+### Goals
+- Make Composer Mode deterministic across all templates (`Main+Thumbs`, `Split`, `PiP`, `Grid`).
+- Eliminate transition/draw-loop dark-frame lockups during rapid layout/preset switching.
+- Improve live voice clarity and reduce audio pumping/chatter, including Virtual Audio Cable workflows.
+- Publish updated desktop production release.
+
+### Changes implemented
+
+#### Composer / Scene / Transition reliability
+- Added pure layout engine:
+  - `components/Studio/composerLayout.ts`
+  - Deterministic placement and visibility for:
+    - `main_thumbs`
+    - `side_by_side`
+    - `pip_corner`
+    - `grid_2x2`
+    - `freeform` passthrough behavior
+- Added automated helper tests:
+  - `components/Studio/composerLayout.test.js` (`node:test`)
+- Refactored `StudioCore` composer orchestration:
+  - Single deterministic apply path: `applyComposerLayoutState(...)`
+  - Explicit camera-layer visibility updates (prevents stale hidden layers)
+  - Overflow note when cap hides extras (`hidden by layout cap`)
+  - Scene preset compatibility normalization + `version`/`cameraOrder` support
+  - Removed old timeout/race layout paths
+- Hardened transition pipeline:
+  - Tokenized RAF cancellation
+  - Alpha reset on complete/cancel paths
+  - Transitions now consistently scoped to:
+    - Apply Layout
+    - Load Scene Preset
+    - Cut To Next
+    - Auto-Director
+  - Manual `Main` remains instant
+
+#### Canvas draw-loop stabilization
+- Updated `components/Studio/CanvasStage.tsx`:
+  - Moved dynamic draw inputs to refs (`layers`, `selectedLayerId`, `transitionOverlay`, `isPro`)
+  - Single stable RAF loop reads current refs
+  - Removed stale-closure behavior that could leave dark overlay until interaction
+
+#### Audio clarity and ingest hardening
+- Updated `components/Studio/StudioCore.tsx` audio engine:
+  - Added master mix bus with subtle EQ + compressor + limiter before stream destination
+  - Added per-track tone + compressor profile tuning
+  - Improved HyperGate logic with hysteresis/hold adjustments to reduce gate chatter
+  - Ensured gate opens cleanly when noise cancellation is disabled
+  - Added preferred audio constraints for ingest:
+    - `echoCancellation: false`
+    - `noiseSuppression: false`
+    - `autoGainControl: false`
+    - prefer 48kHz path
+  - Applied same capture-quality constraints during live microphone switching
+- Updated `components/Studio/AudioMixer.tsx`:
+  - Restored/added explicit Noise Cancellation toggle button (Sparkles) per track
+- Updated `components/Studio/DeviceSelectorModal.tsx`:
+  - Clarified Virtual Audio Cable guidance:
+    - VAC must be selected under **Audio Input** to be streamed
+    - Audio Output is monitor sink only
+
+#### Help text alignment
+- Updated `components/Studio/HelpModal.tsx` text so Composer/transition behavior and overflow policy match real runtime behavior.
+
+### Release and deployment actions
+- Pushed stabilization commit to `master`:
+  - `689050b` - stabilize composer transitions and harden audio clarity pipeline
+- Initial `desktop:publish` on `0.1.7` built successfully but skipped GitHub publish because `v0.1.7` already existed.
+- Bumped version/tag:
+  - `0.1.8` (`v0.1.8`) via patch release commit:
+    - `986426b` - chore(release): 0.1.8
+- Published desktop release successfully:
+  - GitHub release created: `v0.1.8`
+  - Uploaded:
+    - `AetherStudio-0.1.8-x64.exe`
+    - `AetherStudio-0.1.8-x64.exe.blockmap`
+    - `latest.yml`
+
+### Verification status
+- `node --test --experimental-strip-types components/Studio/composerLayout.test.js`: pass (8/8)
+- `npm run build`: pass
+- `npm run desktop:publish` (v0.1.8): pass
+
+### Operational note
+- For external AI-processed audio chains (e.g., HyperGate app -> VAC), select VAC as **Audio Input** in source selection.
+- Selecting VAC as **Audio Output** only changes monitoring destination and does not route it into stream ingest.
