@@ -58,6 +58,10 @@ const normalizeScenePreset = (raw: any): ScenePreset | null => {
     'grid_2x2',
     'side_by_side',
     'pip_corner',
+    'speaker_focus',
+    'scripture_focus',
+    'sermon_split_left',
+    'sermon_split_right',
   ];
   const layout: ComposerLayoutTemplate = allowedLayouts.includes(raw.layout)
     ? raw.layout
@@ -104,6 +108,7 @@ interface StudioProps {
 }
 
 type StreamQualityPreset = 'high' | 'medium' | 'low';
+type BroadcastIntent = 'speakerFocus' | 'scriptureFocus' | 'audienceInteraction';
 type StudioStatusMsg = {
   type: 'error' | 'info' | 'warn';
   text: string;
@@ -342,6 +347,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   });
   const [presetName, setPresetName] = useState('Main + Thumbs');
   const [layoutTemplate, setLayoutTemplate] = useState<ComposerLayoutTemplate>('main_thumbs');
+  const [intentDirectorOn, setIntentDirectorOn] = useState(() => localStorage.getItem('aether_intent_director_on') === 'true');
+  const [intentDirectorStatus, setIntentDirectorStatus] = useState('Idle');
+  const [intentCooldownMs, setIntentCooldownMs] = useState(() => Number(localStorage.getItem('aether_intent_cooldown_ms') || 1200));
 
   const [transitionMode, setTransitionMode] = useState<'cut' | 'fade' | 'dip_white'>(() => {
     return (localStorage.getItem('aether_transition_mode') as any) || 'cut';
@@ -435,6 +443,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const transitionRafRef = useRef<number | null>(null);
   const transitionTokenRef = useRef<number>(0);
   const layoutTemplateRef = useRef<ComposerLayoutTemplate>(layoutTemplate);
+  const intentDirectorOnRef = useRef<boolean>(intentDirectorOn);
+  const intentLastSwitchedAtRef = useRef<number>(0);
+  const intentLastAppliedRef = useRef<BroadcastIntent | null>(null);
+  const routeIntentSignalRef = useRef<(signalName: string, payload?: any) => void>(() => {});
   const hiddenByLayoutRef = useRef<number>(0);
   const streamHealthRef = useRef<{ bytes: number; drops: number; lastTs: number }>({ bytes: 0, drops: 0, lastTs: Date.now() });
   const streamHealthTimerRef = useRef<number | null>(null);
@@ -474,6 +486,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   useEffect(() => {
     layoutTemplateRef.current = layoutTemplate;
   }, [layoutTemplate]);
+
+  useEffect(() => {
+    intentDirectorOnRef.current = intentDirectorOn;
+  }, [intentDirectorOn]);
 
   const handleSettingsDrag = useCallback((e: MouseEvent) => {
     const drag = settingsDragRef.current;
@@ -565,7 +581,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     localStorage.setItem('aether_auto_director', String(autoDirectorOn));
     localStorage.setItem('aether_auto_director_interval', String(autoDirectorInterval || 12));
     localStorage.setItem('aether_auto_director_mode', autoDirectorMode);
-  }, [autoDirectorOn, autoDirectorInterval, autoDirectorMode]);
+    localStorage.setItem('aether_intent_director_on', String(intentDirectorOn));
+    localStorage.setItem('aether_intent_cooldown_ms', String(intentCooldownMs || 1200));
+  }, [autoDirectorOn, autoDirectorInterval, autoDirectorMode, intentDirectorOn, intentCooldownMs]);
 
   useEffect(() => {
     localStorage.setItem('aether_lower_third_name', lowerThirdName);
@@ -1127,6 +1145,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             const formatted = `[${category}] ${data.text}`;
             setAudienceMessages(prev => [...prev, formatted]);
             setStatusMsg({ type: "info", text: `New audience message received: ${category}` });
+            routeIntentSignalRef.current('audience.message', { category, text: data.text });
           }
         });
       });
@@ -1384,6 +1403,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             // Handle Lumina Control Bridge Events
             if (msg?.type === "lumina_event") {
               const { event, payload } = msg;
+              routeIntentSignalRef.current(event, payload);
               if (event === "lumina.scene.switch") {
                 const targetScene = payload?.sceneName || payload?.target;
                 if (targetScene && activeComposerScene?.name !== targetScene) {
@@ -2884,6 +2904,73 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     }
   }, [resolveOrderedCameraLayerIds, selectedLayerId]);
 
+  const applyIntentLayout = useCallback((intent: BroadcastIntent, reason: string) => {
+    if (!intentDirectorOnRef.current) return;
+    const now = Date.now();
+    const cooldown = Math.max(200, Number(intentCooldownMs || 1200));
+    if (now - intentLastSwitchedAtRef.current < cooldown) return;
+    if (intentLastAppliedRef.current === intent && now - intentLastSwitchedAtRef.current < cooldown * 2) return;
+
+    const layoutByIntent: Record<BroadcastIntent, ComposerLayoutTemplate | null> = {
+      speakerFocus: 'speaker_focus',
+      scriptureFocus: 'scripture_focus',
+      audienceInteraction: null,
+    };
+
+    const targetLayout = layoutByIntent[intent];
+    intentLastSwitchedAtRef.current = now;
+    intentLastAppliedRef.current = intent;
+    setIntentDirectorStatus(`${intent} · ${reason}`);
+
+    if (intent === 'audienceInteraction' && pinnedMessage.trim()) {
+      setPinnedVisibility(true);
+    }
+
+    if (!targetLayout) return;
+
+    runTransition(() => {
+      setComposerMode(true);
+      setLayoutTemplate(targetLayout);
+      applyComposerLayoutState(selectedLayerId || null, targetLayout);
+    });
+  }, [applyComposerLayoutState, intentCooldownMs, pinnedMessage, selectedLayerId]);
+
+  const routeIntentSignal = useCallback((signalName: string, payload?: any) => {
+    const eventName = String(signalName || '').toLowerCase();
+    if (!eventName || !intentDirectorOnRef.current) return;
+
+    if (
+      eventName.includes('scripture') ||
+      eventName.includes('slidechanged') ||
+      eventName.includes('slide.change') ||
+      payload?.scripture === true
+    ) {
+      applyIntentLayout('scriptureFocus', signalName);
+      return;
+    }
+
+    if (
+      eventName.includes('speaker') ||
+      eventName.includes('audio') ||
+      eventName.includes('camera')
+    ) {
+      applyIntentLayout('speakerFocus', signalName);
+      return;
+    }
+
+    if (
+      eventName.includes('question') ||
+      eventName.includes('message') ||
+      eventName.includes('audience')
+    ) {
+      applyIntentLayout('audienceInteraction', signalName);
+    }
+  }, [applyIntentLayout]);
+
+  useEffect(() => {
+    routeIntentSignalRef.current = routeIntentSignal;
+  }, [routeIntentSignal]);
+
   const saveScenePreset = () => {
     const positions = layers.map(l => ({
       layerId: l.id,
@@ -3543,6 +3630,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       { id: 'side_by_side' as const, label: 'Split', icon: '◫' },
                       { id: 'pip_corner' as const, label: 'PiP', icon: '◲' },
                       { id: 'grid_2x2' as const, label: 'Grid', icon: '⊞' },
+                      { id: 'speaker_focus' as const, label: 'Speaker', icon: '◉' },
+                      { id: 'scripture_focus' as const, label: 'Scripture', icon: '◧' },
+                      { id: 'sermon_split_left' as const, label: 'Split L', icon: '◭' },
+                      { id: 'sermon_split_right' as const, label: 'Split R', icon: '◮' },
                     ].map(lt => (
                       <button
                         key={lt.id}
@@ -3570,6 +3661,32 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   >
                     Apply Layout
                   </button>
+                  <div className="mt-3 p-2 rounded-lg border border-aether-700 bg-aether-900/35 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-semibold text-white">Intent Director</div>
+                        <div className="text-[10px] text-gray-400">Context-aware auto layouts from Lumina/Audience/Aether signals</div>
+                      </div>
+                      <label className="aether-toggle">
+                        <input type="checkbox" checked={intentDirectorOn} onChange={(e) => setIntentDirectorOn(e.target.checked)} />
+                        <span className="slider" />
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-gray-400">Cooldown</span>
+                      <input
+                        type="number"
+                        min={200}
+                        max={5000}
+                        step={100}
+                        value={intentCooldownMs}
+                        onChange={(e) => setIntentCooldownMs(Number(e.target.value) || 1200)}
+                        className="w-20 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1 text-[10px] text-white text-center outline-none"
+                      />
+                      <span className="text-[10px] text-gray-400">ms</span>
+                      <div className="ml-auto text-[10px] text-aether-300 truncate max-w-[190px]">{intentDirectorStatus}</div>
+                    </div>
+                  </div>
                 </CollapsibleSection>
 
                 {/* ─── AUTO-DIRECTOR ─── */}
@@ -3709,6 +3826,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                         <option value="side_by_side">◫ Side by Side</option>
                         <option value="pip_corner">◲ PiP Corner</option>
                         <option value="grid_2x2">⊞ 2x2 Grid</option>
+                        <option value="speaker_focus">◉ Speaker Focus</option>
+                        <option value="scripture_focus">◧ Scripture Focus</option>
+                        <option value="sermon_split_left">◭ Sermon Split Left</option>
+                        <option value="sermon_split_right">◮ Sermon Split Right</option>
                         <option value="freeform">◇ Freeform</option>
                       </select>
                       <button onClick={saveScenePreset} className="section-btn section-btn-primary">Save</button>
@@ -3717,7 +3838,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   {scenePresets.length === 0 && <div className="text-xs text-gray-500">No presets saved yet.</div>}
                   {scenePresets.map(p => (
                     <div key={p.id} className="flex items-center gap-2 py-1.5 group border-b border-aether-700/30 last:border-0">
-                      <span className="text-base">{p.layout === 'main_thumbs' ? '▣' : p.layout === 'side_by_side' ? '◫' : p.layout === 'pip_corner' ? '◲' : p.layout === 'grid_2x2' ? '⊞' : '◇'}</span>
+                      <span className="text-base">{p.layout === 'main_thumbs' ? '▣' : p.layout === 'side_by_side' ? '◫' : p.layout === 'pip_corner' ? '◲' : p.layout === 'grid_2x2' ? '⊞' : p.layout === 'speaker_focus' ? '◉' : p.layout === 'scripture_focus' ? '◧' : p.layout === 'sermon_split_left' ? '◭' : p.layout === 'sermon_split_right' ? '◮' : '◇'}</span>
                       <div className="flex-1 min-w-0">
                         <div className="text-xs text-gray-200 truncate">{p.name}</div>
                         <div className="text-xs text-gray-400">{p.layout.replace('_', ' ')}</div>

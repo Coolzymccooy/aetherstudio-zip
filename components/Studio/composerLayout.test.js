@@ -69,6 +69,32 @@ test("grid_2x2 lays out first four and hides overflow", () => {
   assert.equal(result.placements.a.height, 540);
 });
 
+test("speaker_focus keeps main full and limits secondary to a single pip", () => {
+  const result = computeComposerLayout({
+    ...baseInput,
+    layoutTemplate: "speaker_focus",
+    cameraLayerIds: ["a", "b", "c"],
+    selectedMainLayerId: "b",
+    maxComposedCameras: 4,
+  });
+
+  assert.equal(result.visibleLayerIds.length, 2);
+  assert.equal(result.placements.b.width, 1920);
+  assert.equal(result.hiddenLayerIds.includes("c"), true);
+});
+
+test("scripture_focus creates split rail with rounded secondary card", () => {
+  const result = computeComposerLayout({
+    ...baseInput,
+    layoutTemplate: "scripture_focus",
+    cameraLayerIds: ["a", "b"],
+    selectedMainLayerId: "a",
+  });
+
+  assert.equal(result.placements.a.width > result.placements.b.width, true);
+  assert.equal(result.placements.b.styleAdjustments.rounded, 14);
+});
+
 test("maxComposedCameras cap is enforced deterministically", () => {
   const result = computeComposerLayout({
     ...baseInput,

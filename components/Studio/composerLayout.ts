@@ -3,7 +3,11 @@ export type ComposerLayoutTemplate =
   | "main_thumbs"
   | "grid_2x2"
   | "side_by_side"
-  | "pip_corner";
+  | "pip_corner"
+  | "speaker_focus"
+  | "scripture_focus"
+  | "sermon_split_left"
+  | "sermon_split_right";
 
 export type ComposerStyleAdjustments = {
   rounded?: number;
@@ -241,6 +245,51 @@ const buildGrid2x2 = (visibleLayerIds: string[], canvasWidth: number, canvasHeig
   return placements;
 };
 
+const buildSermonSplit = (
+  visibleLayerIds: string[],
+  mainLayerId: string,
+  canvasWidth: number,
+  canvasHeight: number,
+  side: "left" | "right"
+) => {
+  const placements: Record<string, ComposerPlacement> = {};
+  const PAD = 20;
+  const heroRatio = 0.68;
+  const heroWidth = Math.round(canvasWidth * heroRatio);
+  const railWidth = canvasWidth - heroWidth;
+  const mainOnLeft = side === "right";
+  const mainX = mainOnLeft ? 0 : railWidth;
+  const railX = mainOnLeft ? heroWidth : 0;
+  const secondary = visibleLayerIds.filter((id) => id !== mainLayerId);
+
+  placements[mainLayerId] = {
+    x: mainX,
+    y: 0,
+    width: heroWidth,
+    height: canvasHeight,
+    zIndex: 120,
+    visible: true,
+    styleAdjustments: { rounded: 0 },
+  };
+
+  if (!secondary.length) return placements;
+
+  const railItemHeight = Math.max(180, Math.floor((canvasHeight - PAD * (secondary.length + 1)) / secondary.length));
+  secondary.forEach((layerId, idx) => {
+    placements[layerId] = {
+      x: railX + PAD,
+      y: PAD + idx * (railItemHeight + PAD),
+      width: Math.max(220, railWidth - PAD * 2),
+      height: railItemHeight,
+      zIndex: 220 + idx,
+      visible: true,
+      styleAdjustments: { rounded: 14 },
+    };
+  });
+
+  return placements;
+};
+
 export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayoutResult => {
   const orderedLayerIds = reorderByOverride(input.cameraLayerIds, input.cameraOrderOverride);
 
@@ -304,6 +353,54 @@ export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayou
     visibleLayerIds = gridVisible;
     hiddenLayerIds = uniq([...hiddenLayerIds, ...composedLayerIds.slice(4)]);
     Object.assign(placements, buildGrid2x2(gridVisible, input.canvasWidth, input.canvasHeight));
+  } else if (input.layoutTemplate === "speaker_focus") {
+    const speakerVisible = [resolvedMainLayerId, ...composedLayerIds.filter((id) => id !== resolvedMainLayerId)]
+      .filter(Boolean)
+      .slice(0, 2) as string[];
+    visibleLayerIds = speakerVisible;
+    hiddenLayerIds = uniq([...hiddenLayerIds, ...composedLayerIds.filter((id) => !speakerVisible.includes(id))]);
+    Object.assign(
+      placements,
+      buildPipCorner(
+        speakerVisible,
+        resolvedMainLayerId as string,
+        input.canvasWidth,
+        input.canvasHeight
+      )
+    );
+  } else if (input.layoutTemplate === "scripture_focus") {
+    Object.assign(
+      placements,
+      buildSermonSplit(
+        composedLayerIds,
+        resolvedMainLayerId as string,
+        input.canvasWidth,
+        input.canvasHeight,
+        "left"
+      )
+    );
+  } else if (input.layoutTemplate === "sermon_split_left") {
+    Object.assign(
+      placements,
+      buildSermonSplit(
+        composedLayerIds,
+        resolvedMainLayerId as string,
+        input.canvasWidth,
+        input.canvasHeight,
+        "left"
+      )
+    );
+  } else if (input.layoutTemplate === "sermon_split_right") {
+    Object.assign(
+      placements,
+      buildSermonSplit(
+        composedLayerIds,
+        resolvedMainLayerId as string,
+        input.canvasWidth,
+        input.canvasHeight,
+        "right"
+      )
+    );
   } else {
     Object.assign(
       placements,
