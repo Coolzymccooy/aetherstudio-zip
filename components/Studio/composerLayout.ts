@@ -1,16 +1,24 @@
-export type ComposerLayoutTemplate =
-  | "freeform"
-  | "main_thumbs"
-  | "grid_2x2"
-  | "side_by_side"
-  | "pip_corner"
-  | "speaker_focus"
-  | "scripture_focus"
-  | "sermon_split_left"
-  | "sermon_split_right";
+import type {
+  AspectRatioBehavior,
+  BackgroundStyleId,
+  ComposerLayoutTemplate,
+  FrameStyleId,
+  LayoutSafeMargins,
+  LayoutThemeId,
+  MotionStyleId,
+} from "./cinematicLayout";
 
 export type ComposerStyleAdjustments = {
   rounded?: number;
+  frameStyle?: FrameStyleId;
+  shadowColor?: string;
+  shadowBlur?: number;
+  shadowOpacity?: number;
+  highlightOpacity?: number;
+  cardPadding?: number;
+  cardBackground?: string;
+  aspectMode?: "cover" | "contain";
+  focusRole?: "primary" | "secondary" | "support";
 };
 
 export type ComposerPlacement = {
@@ -23,6 +31,33 @@ export type ComposerPlacement = {
   styleAdjustments?: ComposerStyleAdjustments;
 };
 
+export type ComposerGuide = {
+  axis: "x" | "y";
+  value: number;
+  kind: "safe" | "center" | "third";
+};
+
+export type ComposerSnapResult = {
+  x: number;
+  y: number;
+  snappedX: boolean;
+  snappedY: boolean;
+  guides: ComposerGuide[];
+};
+
+export type ComposerLayoutRenderMeta = {
+  themeId?: LayoutThemeId | null;
+  backgroundStyle: BackgroundStyleId;
+  frameStyle: FrameStyleId;
+  motionStyle: MotionStyleId;
+  safeMargins: LayoutSafeMargins;
+  aspectRatioBehavior: AspectRatioBehavior;
+  defaultMediaFitMode: "contain" | "cover";
+  guides: ComposerGuide[];
+  transitionDurationMs: number;
+  swappedRoles: boolean;
+};
+
 export type ComposerLayoutInput = {
   layoutTemplate: ComposerLayoutTemplate;
   cameraLayerIds: string[];
@@ -31,6 +66,13 @@ export type ComposerLayoutInput = {
   canvasWidth: number;
   canvasHeight: number;
   maxComposedCameras: number;
+  backgroundStyle?: BackgroundStyleId;
+  frameStyle?: FrameStyleId;
+  motionStyle?: MotionStyleId;
+  safeMargins?: LayoutSafeMargins;
+  aspectRatioBehavior?: AspectRatioBehavior;
+  themeId?: LayoutThemeId | null;
+  swappedRoles?: boolean;
 };
 
 export type ComposerLayoutResult = {
@@ -40,6 +82,23 @@ export type ComposerLayoutResult = {
   visibleLayerIds: string[];
   hiddenLayerIds: string[];
   cameraLayerOrder: string[];
+  renderMeta: ComposerLayoutRenderMeta;
+};
+
+type Bounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+const MIN_VISIBLE_PADDING = 10;
+
+const DEFAULT_SAFE_MARGINS: LayoutSafeMargins = {
+  top: 54,
+  right: 64,
+  bottom: 54,
+  left: 64,
 };
 
 export const computeTransitionAlpha = (elapsedMs: number, durationMs: number) => {
@@ -62,9 +121,114 @@ const reorderByOverride = (cameraLayerIds: string[], override?: string[]) => {
   return [...pinned, ...tail];
 };
 
-const resolveMainLayerId = (cameraLayerIds: string[], requested?: string | null) => {
-  if (requested && cameraLayerIds.includes(requested)) return requested;
-  return cameraLayerIds[0] || null;
+const resolveSafeMargins = (
+  canvasWidth: number,
+  canvasHeight: number,
+  safeMargins?: LayoutSafeMargins
+): LayoutSafeMargins => {
+  const margins = safeMargins || DEFAULT_SAFE_MARGINS;
+  return {
+    top: Math.max(16, Math.min(canvasHeight * 0.18, margins.top)),
+    right: Math.max(16, Math.min(canvasWidth * 0.18, margins.right)),
+    bottom: Math.max(16, Math.min(canvasHeight * 0.18, margins.bottom)),
+    left: Math.max(16, Math.min(canvasWidth * 0.18, margins.left)),
+  };
+};
+
+const createWorkingBounds = (
+  canvasWidth: number,
+  canvasHeight: number,
+  safeMargins: LayoutSafeMargins
+): Bounds => ({
+  x: safeMargins.left,
+  y: safeMargins.top,
+  width: Math.max(320, canvasWidth - safeMargins.left - safeMargins.right),
+  height: Math.max(220, canvasHeight - safeMargins.top - safeMargins.bottom),
+});
+
+const insetBounds = (bounds: Bounds, padding: number): Bounds => ({
+  x: bounds.x + padding,
+  y: bounds.y + padding,
+  width: Math.max(120, bounds.width - padding * 2),
+  height: Math.max(120, bounds.height - padding * 2),
+});
+
+const clampPlacementToBounds = (
+  placement: ComposerPlacement,
+  bounds: Bounds
+): ComposerPlacement => {
+  if (!placement.visible) return placement;
+
+  const width = Math.min(Math.max(48, placement.width), bounds.width);
+  const height = Math.min(Math.max(48, placement.height), bounds.height);
+  const x = Math.min(Math.max(placement.x, bounds.x), bounds.x + bounds.width - width);
+  const y = Math.min(Math.max(placement.y, bounds.y), bounds.y + bounds.height - height);
+
+  return {
+    ...placement,
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.round(width),
+    height: Math.round(height),
+  };
+};
+
+const clampPlacementsToBounds = (
+  placements: Record<string, ComposerPlacement>,
+  bounds: Bounds
+) => {
+  const clampedBounds = insetBounds(bounds, MIN_VISIBLE_PADDING);
+  Object.keys(placements).forEach((layerId) => {
+    placements[layerId] = clampPlacementToBounds(placements[layerId], clampedBounds);
+  });
+};
+
+const buildGuides = (canvasWidth: number, canvasHeight: number, safeMargins: LayoutSafeMargins): ComposerGuide[] => {
+  const thirdsX = [canvasWidth / 3, (canvasWidth / 3) * 2];
+  const thirdsY = [canvasHeight / 3, (canvasHeight / 3) * 2];
+  return [
+    { axis: "x", value: safeMargins.left, kind: "safe" },
+    { axis: "x", value: canvasWidth - safeMargins.right, kind: "safe" },
+    { axis: "y", value: safeMargins.top, kind: "safe" },
+    { axis: "y", value: canvasHeight - safeMargins.bottom, kind: "safe" },
+    { axis: "x", value: canvasWidth / 2, kind: "center" },
+    { axis: "y", value: canvasHeight / 2, kind: "center" },
+    { axis: "x", value: thirdsX[0], kind: "third" },
+    { axis: "x", value: thirdsX[1], kind: "third" },
+    { axis: "y", value: thirdsY[0], kind: "third" },
+    { axis: "y", value: thirdsY[1], kind: "third" },
+  ];
+};
+
+const frameAdjustmentsForRole = (
+  role: "primary" | "secondary" | "support",
+  frameStyle: FrameStyleId,
+  aspectRatioBehavior: AspectRatioBehavior
+): ComposerStyleAdjustments => {
+  const isPrimary = role === "primary";
+  const rounded = frameStyle === "flat" ? (isPrimary ? 10 : 8) : (isPrimary ? 18 : 16);
+  return {
+    rounded,
+    frameStyle,
+    shadowColor: isPrimary ? "rgba(15,23,42,0.65)" : "rgba(15,23,42,0.48)",
+    shadowBlur: frameStyle === "flat" ? 10 : (isPrimary ? 26 : 18),
+    shadowOpacity: frameStyle === "flat" ? 0.12 : (isPrimary ? 0.3 : 0.22),
+    highlightOpacity: frameStyle === "glass" ? 0.32 : 0.18,
+    cardPadding: frameStyle === "flat" ? 8 : 14,
+    cardBackground: frameStyle === "glass"
+      ? "rgba(15,23,42,0.14)"
+      : frameStyle === "floating"
+        ? "rgba(7,12,28,0.22)"
+        : "rgba(10,14,26,0.08)",
+    aspectMode: "contain",
+    focusRole: role,
+  };
+};
+
+const resolveMainLayerId = (cameraLayerIds: string[], requested?: string | null, swappedRoles?: boolean) => {
+  const requestedMain = requested && cameraLayerIds.includes(requested) ? requested : (cameraLayerIds[0] || null);
+  if (!swappedRoles || cameraLayerIds.length < 2 || !requestedMain) return requestedMain;
+  return cameraLayerIds.find((id) => id !== requestedMain) || requestedMain;
 };
 
 const withHiddenPlacements = (
@@ -79,7 +243,7 @@ const withHiddenPlacements = (
       height: 0,
       zIndex: 0,
       visible: false,
-      styleAdjustments: { rounded: 0 },
+      styleAdjustments: { rounded: 0, frameStyle: "flat", focusRole: "support" },
     };
   });
 };
@@ -87,40 +251,41 @@ const withHiddenPlacements = (
 const buildMainThumbs = (
   visibleLayerIds: string[],
   mainLayerId: string,
-  canvasWidth: number,
-  canvasHeight: number
+  bounds: Bounds,
+  frameStyle: FrameStyleId,
+  aspectRatioBehavior: AspectRatioBehavior
 ) => {
   const placements: Record<string, ComposerPlacement> = {};
-  const PAD = 16;
-  const THUMB_W = 320;
-  const THUMB_H = 180;
+  const pad = 18;
+  const thumbW = Math.round(bounds.width * 0.19);
+  const thumbH = Math.round(thumbW * 0.56);
   let thumbIdx = 0;
 
   visibleLayerIds.forEach((layerId) => {
     if (layerId === mainLayerId) {
       placements[layerId] = {
-        x: 0,
-        y: 0,
-        width: canvasWidth,
-        height: canvasHeight,
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
         zIndex: 100,
         visible: true,
-        styleAdjustments: { rounded: 0 },
+        styleAdjustments: frameAdjustmentsForRole("primary", frameStyle, aspectRatioBehavior),
       };
       return;
     }
 
-    const x = canvasWidth - THUMB_W - PAD;
-    const y = PAD + thumbIdx * (THUMB_H + PAD);
+    const x = bounds.x + bounds.width - thumbW;
+    const y = bounds.y + thumbIdx * (thumbH + pad);
     thumbIdx += 1;
     placements[layerId] = {
       x,
       y,
-      width: THUMB_W,
-      height: THUMB_H,
+      width: thumbW,
+      height: thumbH,
       zIndex: 200 + thumbIdx,
       visible: true,
-      styleAdjustments: { rounded: 0 },
+      styleAdjustments: frameAdjustmentsForRole("secondary", frameStyle, aspectRatioBehavior),
     };
   });
 
@@ -130,58 +295,60 @@ const buildMainThumbs = (
 const buildSideBySide = (
   visibleLayerIds: string[],
   mainLayerId: string,
-  canvasWidth: number,
-  canvasHeight: number
+  bounds: Bounds,
+  frameStyle: FrameStyleId,
+  aspectRatioBehavior: AspectRatioBehavior
 ) => {
   const placements: Record<string, ComposerPlacement> = {};
-  const PAD = 16;
-  const THUMB_W = 280;
-  const THUMB_H = 158;
+  const pad = 18;
+  const thumbW = Math.round(bounds.width * 0.17);
+  const thumbH = Math.round(thumbW * 0.56);
   const secondary = visibleLayerIds.filter((id) => id !== mainLayerId);
   const secondMain = secondary[0] || null;
   const extras = secondary.slice(1);
+  const columnWidth = Math.floor((bounds.width - pad) / 2);
 
   if (!secondMain) {
     placements[mainLayerId] = {
-      x: 0,
-      y: 0,
-      width: canvasWidth,
-      height: canvasHeight,
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
       zIndex: 100,
       visible: true,
-      styleAdjustments: { rounded: 0 },
+      styleAdjustments: frameAdjustmentsForRole("primary", frameStyle, aspectRatioBehavior),
     };
     return placements;
   }
 
   placements[mainLayerId] = {
-    x: 0,
-    y: 0,
-    width: canvasWidth / 2,
-    height: canvasHeight,
+    x: bounds.x,
+    y: bounds.y,
+    width: columnWidth,
+    height: bounds.height,
     zIndex: 100,
     visible: true,
-    styleAdjustments: { rounded: 0 },
+    styleAdjustments: frameAdjustmentsForRole("primary", frameStyle, aspectRatioBehavior),
   };
   placements[secondMain] = {
-    x: canvasWidth / 2,
-    y: 0,
-    width: canvasWidth / 2,
-    height: canvasHeight,
+    x: bounds.x + columnWidth + pad,
+    y: bounds.y,
+    width: columnWidth,
+    height: bounds.height,
     zIndex: 101,
     visible: true,
-    styleAdjustments: { rounded: 0 },
+    styleAdjustments: frameAdjustmentsForRole("secondary", frameStyle, aspectRatioBehavior),
   };
 
   extras.forEach((layerId, idx) => {
     placements[layerId] = {
-      x: canvasWidth - THUMB_W - PAD,
-      y: PAD + idx * (THUMB_H + PAD),
-      width: THUMB_W,
-      height: THUMB_H,
+      x: bounds.x + bounds.width - thumbW,
+      y: bounds.y + idx * (thumbH + pad),
+      width: thumbW,
+      height: thumbH,
       zIndex: 200 + idx,
       visible: true,
-      styleAdjustments: { rounded: 0 },
+      styleAdjustments: frameAdjustmentsForRole("support", frameStyle, aspectRatioBehavior),
     };
   });
 
@@ -191,55 +358,62 @@ const buildSideBySide = (
 const buildPipCorner = (
   visibleLayerIds: string[],
   mainLayerId: string,
-  canvasWidth: number,
-  canvasHeight: number
+  bounds: Bounds,
+  frameStyle: FrameStyleId,
+  aspectRatioBehavior: AspectRatioBehavior
 ) => {
   const placements: Record<string, ComposerPlacement> = {};
-  const PIP_W = 320;
-  const PIP_H = 180;
-  const PAD = 24;
+  const pipW = Math.round(bounds.width * 0.24);
+  const pipH = Math.round(pipW * 0.56);
+  const pad = 24;
 
   placements[mainLayerId] = {
-    x: 0,
-    y: 0,
-    width: canvasWidth,
-    height: canvasHeight,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
     zIndex: 100,
     visible: true,
-    styleAdjustments: { rounded: 0 },
+    styleAdjustments: frameAdjustmentsForRole("primary", frameStyle, aspectRatioBehavior),
   };
 
   const others = visibleLayerIds.filter((id) => id !== mainLayerId).slice(0, 3);
   others.forEach((layerId, idx) => {
     placements[layerId] = {
-      x: canvasWidth - PIP_W - PAD,
-      y: canvasHeight - PIP_H - PAD - idx * (PIP_H + 8),
-      width: PIP_W,
-      height: PIP_H,
+      x: bounds.x + bounds.width - pipW,
+      y: bounds.y + bounds.height - pipH - idx * (pipH + pad),
+      width: pipW,
+      height: pipH,
       zIndex: 200 + idx,
       visible: true,
-      styleAdjustments: { rounded: 12 },
+      styleAdjustments: frameAdjustmentsForRole(idx === 0 ? "secondary" : "support", frameStyle, aspectRatioBehavior),
     };
   });
 
   return placements;
 };
 
-const buildGrid2x2 = (visibleLayerIds: string[], canvasWidth: number, canvasHeight: number) => {
+const buildGrid2x2 = (
+  visibleLayerIds: string[],
+  bounds: Bounds,
+  frameStyle: FrameStyleId,
+  aspectRatioBehavior: AspectRatioBehavior
+) => {
   const placements: Record<string, ComposerPlacement> = {};
-  const cellW = canvasWidth / 2;
-  const cellH = canvasHeight / 2;
+  const gap = 18;
+  const cellW = Math.floor((bounds.width - gap) / 2);
+  const cellH = Math.floor((bounds.height - gap) / 2);
   visibleLayerIds.slice(0, 4).forEach((layerId, idx) => {
     const col = idx % 2;
     const row = Math.floor(idx / 2);
     placements[layerId] = {
-      x: col * cellW,
-      y: row * cellH,
+      x: bounds.x + col * (cellW + gap),
+      y: bounds.y + row * (cellH + gap),
       width: cellW,
       height: cellH,
       zIndex: 100 + idx,
       visible: true,
-      styleAdjustments: { rounded: 0 },
+      styleAdjustments: frameAdjustmentsForRole(idx === 0 ? "primary" : "secondary", frameStyle, aspectRatioBehavior),
     };
   });
   return placements;
@@ -248,59 +422,135 @@ const buildGrid2x2 = (visibleLayerIds: string[], canvasWidth: number, canvasHeig
 const buildSermonSplit = (
   visibleLayerIds: string[],
   mainLayerId: string,
-  canvasWidth: number,
-  canvasHeight: number,
-  side: "left" | "right"
+  bounds: Bounds,
+  side: "left" | "right",
+  frameStyle: FrameStyleId,
+  aspectRatioBehavior: AspectRatioBehavior
 ) => {
   const placements: Record<string, ComposerPlacement> = {};
-  const PAD = 20;
-  const heroRatio = 0.68;
-  const heroWidth = Math.round(canvasWidth * heroRatio);
-  const railWidth = canvasWidth - heroWidth;
-  const mainOnLeft = side === "right";
-  const mainX = mainOnLeft ? 0 : railWidth;
-  const railX = mainOnLeft ? heroWidth : 0;
+  const pad = 20;
+  const gap = 18;
+  const heroRatio = visibleLayerIds.length > 2 ? 0.61 : 0.64;
+  const heroWidth = Math.round(bounds.width * heroRatio);
+  const railWidth = Math.max(260, bounds.width - heroWidth - gap);
+  const mainOnLeft = side === "left";
+  const mainX = mainOnLeft ? bounds.x : bounds.x + railWidth;
+  const railX = mainOnLeft ? bounds.x + heroWidth + gap : bounds.x;
   const secondary = visibleLayerIds.filter((id) => id !== mainLayerId);
 
   placements[mainLayerId] = {
     x: mainX,
-    y: 0,
-    width: heroWidth,
-    height: canvasHeight,
+    y: bounds.y,
+    width: heroWidth - pad,
+    height: bounds.height,
     zIndex: 120,
     visible: true,
-    styleAdjustments: { rounded: 0 },
+    styleAdjustments: frameAdjustmentsForRole("primary", frameStyle, aspectRatioBehavior),
   };
 
   if (!secondary.length) return placements;
 
-  const railItemHeight = Math.max(180, Math.floor((canvasHeight - PAD * (secondary.length + 1)) / secondary.length));
+  const totalGap = gap * Math.max(secondary.length - 1, 0);
+  const railItemHeight = Math.max(160, Math.floor((bounds.height - totalGap) / secondary.length));
   secondary.forEach((layerId, idx) => {
     placements[layerId] = {
-      x: railX + PAD,
-      y: PAD + idx * (railItemHeight + PAD),
-      width: Math.max(220, railWidth - PAD * 2),
+      x: railX,
+      y: bounds.y + idx * (railItemHeight + gap),
+      width: railWidth,
       height: railItemHeight,
       zIndex: 220 + idx,
       visible: true,
-      styleAdjustments: { rounded: 14 },
+      styleAdjustments: frameAdjustmentsForRole(idx === 0 ? "secondary" : "support", frameStyle, aspectRatioBehavior),
     };
   });
 
   return placements;
 };
 
+const createRenderMeta = (input: ComposerLayoutInput): ComposerLayoutRenderMeta => {
+  const safeMargins = resolveSafeMargins(input.canvasWidth, input.canvasHeight, input.safeMargins);
+  const motionStyle = input.motionStyle || "smooth";
+  return {
+    themeId: input.themeId || null,
+    backgroundStyle: input.backgroundStyle || "gradient_motion",
+    frameStyle: input.frameStyle || "floating",
+    motionStyle,
+    safeMargins,
+    aspectRatioBehavior: input.aspectRatioBehavior || "contain",
+    defaultMediaFitMode: "contain",
+    guides: buildGuides(input.canvasWidth, input.canvasHeight, safeMargins),
+    transitionDurationMs: motionStyle === "snappy" ? 220 : motionStyle === "gentle" ? 340 : 280,
+    swappedRoles: !!input.swappedRoles,
+  };
+};
+
+export const computeFreeformSnap = (input: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  safeMargins?: LayoutSafeMargins;
+  snapThreshold?: number;
+}): ComposerSnapResult => {
+  const safeMargins = resolveSafeMargins(input.canvasWidth, input.canvasHeight, input.safeMargins);
+  const threshold = Math.max(8, input.snapThreshold ?? 22);
+  const xCandidates = [
+    { x: safeMargins.left, guide: { axis: "x" as const, value: safeMargins.left, kind: "safe" as const } },
+    { x: input.canvasWidth / 3 - input.width / 2, guide: { axis: "x" as const, value: input.canvasWidth / 3, kind: "third" as const } },
+    { x: input.canvasWidth / 2 - input.width / 2, guide: { axis: "x" as const, value: input.canvasWidth / 2, kind: "center" as const } },
+    { x: (input.canvasWidth / 3) * 2 - input.width / 2, guide: { axis: "x" as const, value: (input.canvasWidth / 3) * 2, kind: "third" as const } },
+    { x: input.canvasWidth - safeMargins.right - input.width, guide: { axis: "x" as const, value: input.canvasWidth - safeMargins.right, kind: "safe" as const } },
+  ];
+  const yCandidates = [
+    { y: safeMargins.top, guide: { axis: "y" as const, value: safeMargins.top, kind: "safe" as const } },
+    { y: input.canvasHeight / 3 - input.height / 2, guide: { axis: "y" as const, value: input.canvasHeight / 3, kind: "third" as const } },
+    { y: input.canvasHeight / 2 - input.height / 2, guide: { axis: "y" as const, value: input.canvasHeight / 2, kind: "center" as const } },
+    { y: (input.canvasHeight / 3) * 2 - input.height / 2, guide: { axis: "y" as const, value: (input.canvasHeight / 3) * 2, kind: "third" as const } },
+    { y: input.canvasHeight - safeMargins.bottom - input.height, guide: { axis: "y" as const, value: input.canvasHeight - safeMargins.bottom, kind: "safe" as const } },
+  ];
+
+  let snappedX = input.x;
+  let snappedY = input.y;
+  let matchedX: ComposerGuide | null = null;
+  let matchedY: ComposerGuide | null = null;
+
+  xCandidates.forEach((candidate) => {
+    if (Math.abs(candidate.x - input.x) <= threshold && (!matchedX || Math.abs(candidate.x - input.x) < Math.abs(snappedX - input.x))) {
+      snappedX = Math.round(candidate.x);
+      matchedX = candidate.guide;
+    }
+  });
+  yCandidates.forEach((candidate) => {
+    if (Math.abs(candidate.y - input.y) <= threshold && (!matchedY || Math.abs(candidate.y - input.y) < Math.abs(snappedY - input.y))) {
+      snappedY = Math.round(candidate.y);
+      matchedY = candidate.guide;
+    }
+  });
+
+  return {
+    x: snappedX,
+    y: snappedY,
+    snappedX: !!matchedX,
+    snappedY: !!matchedY,
+    guides: [matchedX, matchedY].filter((guide): guide is ComposerGuide => !!guide),
+  };
+};
+
 export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayoutResult => {
   const orderedLayerIds = reorderByOverride(input.cameraLayerIds, input.cameraOrderOverride);
+  const renderMeta = createRenderMeta(input);
 
   if (input.layoutTemplate === "freeform") {
     return {
       layoutTemplate: input.layoutTemplate,
-      resolvedMainLayerId: resolveMainLayerId(orderedLayerIds, input.selectedMainLayerId),
+      resolvedMainLayerId: resolveMainLayerId(orderedLayerIds, input.selectedMainLayerId, input.swappedRoles),
       placements: {},
       visibleLayerIds: [],
       hiddenLayerIds: [],
       cameraLayerOrder: orderedLayerIds,
+      renderMeta,
     };
   }
 
@@ -315,13 +565,19 @@ export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayou
       visibleLayerIds: [],
       hiddenLayerIds: [],
       cameraLayerOrder: orderedLayerIds,
+      renderMeta,
     };
   }
 
-  const resolvedMainLayerId = resolveMainLayerId(composedLayerIds, input.selectedMainLayerId);
+  const resolvedMainLayerId = resolveMainLayerId(
+    composedLayerIds,
+    input.selectedMainLayerId,
+    input.swappedRoles
+  );
   const placements: Record<string, ComposerPlacement> = {};
   let visibleLayerIds = [...composedLayerIds];
   let hiddenLayerIds = orderedLayerIds.slice(composedLimit);
+  const bounds = createWorkingBounds(input.canvasWidth, input.canvasHeight, renderMeta.safeMargins);
 
   if (input.layoutTemplate === "side_by_side") {
     Object.assign(
@@ -329,8 +585,9 @@ export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayou
       buildSideBySide(
         composedLayerIds,
         resolvedMainLayerId as string,
-        input.canvasWidth,
-        input.canvasHeight
+        bounds,
+        renderMeta.frameStyle,
+        renderMeta.aspectRatioBehavior
       )
     );
   } else if (input.layoutTemplate === "pip_corner") {
@@ -344,15 +601,19 @@ export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayou
       buildPipCorner(
         pipVisible,
         resolvedMainLayerId as string,
-        input.canvasWidth,
-        input.canvasHeight
+        bounds,
+        renderMeta.frameStyle,
+        renderMeta.aspectRatioBehavior
       )
     );
   } else if (input.layoutTemplate === "grid_2x2") {
     const gridVisible = composedLayerIds.slice(0, 4);
     visibleLayerIds = gridVisible;
     hiddenLayerIds = uniq([...hiddenLayerIds, ...composedLayerIds.slice(4)]);
-    Object.assign(placements, buildGrid2x2(gridVisible, input.canvasWidth, input.canvasHeight));
+    Object.assign(
+      placements,
+      buildGrid2x2(gridVisible, bounds, renderMeta.frameStyle, renderMeta.aspectRatioBehavior)
+    );
   } else if (input.layoutTemplate === "speaker_focus") {
     const speakerVisible = [resolvedMainLayerId, ...composedLayerIds.filter((id) => id !== resolvedMainLayerId)]
       .filter(Boolean)
@@ -364,8 +625,9 @@ export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayou
       buildPipCorner(
         speakerVisible,
         resolvedMainLayerId as string,
-        input.canvasWidth,
-        input.canvasHeight
+        bounds,
+        renderMeta.frameStyle,
+        renderMeta.aspectRatioBehavior
       )
     );
   } else if (input.layoutTemplate === "scripture_focus") {
@@ -374,9 +636,10 @@ export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayou
       buildSermonSplit(
         composedLayerIds,
         resolvedMainLayerId as string,
-        input.canvasWidth,
-        input.canvasHeight,
-        "left"
+        bounds,
+        "left",
+        renderMeta.frameStyle,
+        renderMeta.aspectRatioBehavior
       )
     );
   } else if (input.layoutTemplate === "sermon_split_left") {
@@ -385,9 +648,10 @@ export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayou
       buildSermonSplit(
         composedLayerIds,
         resolvedMainLayerId as string,
-        input.canvasWidth,
-        input.canvasHeight,
-        "left"
+        bounds,
+        "left",
+        renderMeta.frameStyle,
+        renderMeta.aspectRatioBehavior
       )
     );
   } else if (input.layoutTemplate === "sermon_split_right") {
@@ -396,9 +660,10 @@ export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayou
       buildSermonSplit(
         composedLayerIds,
         resolvedMainLayerId as string,
-        input.canvasWidth,
-        input.canvasHeight,
-        "right"
+        bounds,
+        "right",
+        renderMeta.frameStyle,
+        renderMeta.aspectRatioBehavior
       )
     );
   } else {
@@ -407,13 +672,15 @@ export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayou
       buildMainThumbs(
         composedLayerIds,
         resolvedMainLayerId as string,
-        input.canvasWidth,
-        input.canvasHeight
+        bounds,
+        renderMeta.frameStyle,
+        renderMeta.aspectRatioBehavior
       )
     );
   }
 
   withHiddenPlacements(placements, hiddenLayerIds);
+  clampPlacementsToBounds(placements, bounds);
 
   return {
     layoutTemplate: input.layoutTemplate,
@@ -422,5 +689,16 @@ export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayou
     visibleLayerIds,
     hiddenLayerIds,
     cameraLayerOrder: orderedLayerIds,
+    renderMeta,
   };
 };
+
+export type {
+  AspectRatioBehavior,
+  BackgroundStyleId,
+  ComposerLayoutTemplate,
+  FrameStyleId,
+  LayoutSafeMargins,
+  LayoutThemeId,
+  MotionStyleId,
+} from "./cinematicLayout";

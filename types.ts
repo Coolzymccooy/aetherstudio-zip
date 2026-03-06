@@ -31,6 +31,15 @@ export interface LayerStyle {
   accentWidth?: number;   // Width of left accent bar (px)
   slideIn?: boolean;      // Animate in from left edge
   slideSpeed?: number;    // px per frame for slide animation (default 60)
+  frameStyle?: 'floating' | 'flat' | 'glass';
+  shadowColor?: string;
+  shadowBlur?: number;
+  shadowOpacity?: number;
+  highlightOpacity?: number;
+  cardPadding?: number;
+  cardBackground?: string;
+  aspectMode?: 'cover' | 'contain';
+  focusRole?: 'primary' | 'secondary' | 'support';
 }
 
 export interface Layer {

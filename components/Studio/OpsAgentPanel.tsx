@@ -237,7 +237,7 @@ export const OpsAgentPanel: React.FC<OpsAgentPanelProps> = ({
     ];
 
     return (
-        <div className="flex flex-col h-full bg-aether-900 border-l border-aether-700 w-80">
+        <div className="mx-auto flex flex-col h-full w-full max-w-[356px] min-w-0 overflow-hidden bg-aether-900">
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-aether-700 bg-aether-800/40">
                 <div className="flex items-center gap-2">

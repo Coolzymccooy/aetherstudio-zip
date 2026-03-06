@@ -22,7 +22,7 @@ const FONT_OPTIONS = [
 
 export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdate, onDelete, isPro = false }) => {
   if (!layer) return (
-    <div className="w-80 bg-aether-900 border-l border-aether-700 p-6 flex flex-col items-center justify-center text-gray-500 text-center">
+    <div className="mx-auto h-full w-full max-w-[356px] min-w-0 bg-aether-900 p-6 flex flex-col items-center justify-center text-gray-500 text-center">
       <Sliders size={48} className="mb-4 opacity-20" />
       <p className="text-sm">Select a layer on the canvas to edit its properties.</p>
     </div>
@@ -55,7 +55,7 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
   };
 
   return (
-    <div className="w-80 bg-aether-900 border-l border-aether-700 flex flex-col h-full overflow-y-auto">
+    <div className="mx-auto w-full max-w-[356px] min-w-0 bg-aether-900 flex flex-col h-full overflow-hidden">
       <div className="p-4 border-b border-aether-700 bg-aether-800/50">
         <h3 className="font-semibold text-white flex items-center justify-between">
           <span className="truncate">{layer.label}</span>
@@ -63,7 +63,7 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
         </h3>
       </div>
 
-      <div className="p-6 space-y-8">
+      <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-8">
         
         {/* --- Layout Controls (New) --- */}
         <div className="space-y-3">

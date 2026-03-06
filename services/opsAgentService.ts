@@ -306,8 +306,8 @@ export async function askOpsAgent(
     const fullQuery = `You are Aether Ops Agent, a smart troubleshooting assistant for Aether Studio (a browser-based live streaming production suite). Given the user's question and the current system state below, provide concise, actionable troubleshooting advice.\n\n${stateContext}\n\nUser Question: ${question}`;
 
     try {
-        const aiAvailable = await checkAiAvailability();
-        if (!aiAvailable) {
+        const aiHealth = await checkAiAvailability();
+        if (!aiHealth.ok) {
             return fallbackAnswer(question, snapshot);
         }
         const response = await askStudioAssistant(fullQuery);

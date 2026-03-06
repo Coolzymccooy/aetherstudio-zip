@@ -4,6 +4,7 @@ import { getPeerEnv } from "../../src/utils/peerEnv";
 import { CanvasStage } from './CanvasStage';
 import { AudioMixer } from './AudioMixer';
 import { AIPanel } from '../AI/AIPanel';
+import { checkAiAvailability, formatAiHealthMessage, type AiHealthStatus } from '../../services/geminiService';
 import { LayerProperties } from './LayerProperties';
 import { DeviceSelectorModal } from './DeviceSelectorModal';
 import { QRConnectModal } from './QRConnectModal';
@@ -16,7 +17,37 @@ import { verifyLicenseKey, issueLicenseKey } from '../../services/licenseService
 import { signOut, User } from 'firebase/auth';
 import { logStreamStart, logStreamStop, logStreamError } from '../../services/telemetryService';
 import { generateRoomId, getCleanPeerId } from '../../utils/peerId';
-import { computeComposerLayout, computeTransitionAlpha, type ComposerLayoutTemplate } from './composerLayout';
+import { computeComposerLayout, computeTransitionAlpha, type ComposerLayoutRenderMeta } from './composerLayout';
+import {
+  buildLayoutSelection,
+  DEFAULT_BRAND_COLORS,
+  DEFAULT_LAYOUT_THEME_ID,
+  getLayoutThemeDefinition,
+  LAYOUT_PACKS,
+  LAYOUT_THEMES,
+  layoutThemeIdFromTemplate,
+  type BackgroundStyleId,
+  type ComposerLayoutTemplate,
+  type FrameStyleId,
+  type LayoutPackId,
+  type LayoutThemeId,
+  type MotionStyleId,
+} from './cinematicLayout';
+import {
+  inferIntentFromLuminaState,
+  inferThemeFromLuminaState,
+  normalizeLuminaState,
+  type LuminaContentMode,
+  type NormalizedLuminaState,
+  type SmartBroadcastIntent,
+} from './luminaSync';
+import {
+  resolveComposerMainLayerId,
+  resolveProgramLayerId,
+} from './studioInteraction';
+import {
+  buildCanvasLayoutRevision,
+} from './studioShell';
 import Peer, { DataConnection, MediaConnection } from "peerjs";
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -39,12 +70,19 @@ type ScenePreset = {
   id: string;
   name: string;
   layout: ComposerLayoutTemplate;
+  themeId: LayoutThemeId;
+  backgroundStyle: BackgroundStyleId;
+  frameStyle: FrameStyleId;
+  motionStyle: MotionStyleId;
+  layoutPack: LayoutPackId;
+  brandColors: string[];
   mainLayerId?: string | null;
   positions: Array<{ layerId: string; x: number; y: number; width: number; height: number; zIndex: number }>;
   composerMode?: boolean;
   transitionMode?: string;
   version?: number;
   cameraOrder?: string[];
+  swappedRoles?: boolean;
 };
 
 const normalizeScenePreset = (raw: any): ScenePreset | null => {
@@ -66,6 +104,14 @@ const normalizeScenePreset = (raw: any): ScenePreset | null => {
   const layout: ComposerLayoutTemplate = allowedLayouts.includes(raw.layout)
     ? raw.layout
     : 'freeform';
+  const themeId = LAYOUT_THEMES.some((theme) => theme.id === raw.themeId)
+    ? raw.themeId as LayoutThemeId
+    : layoutThemeIdFromTemplate(layout);
+  const selection = buildLayoutSelection(themeId, {
+    backgroundStyle: raw.backgroundStyle,
+    frameStyle: raw.frameStyle,
+    motionStyle: raw.motionStyle,
+  });
 
   const positions = Array.isArray(raw.positions)
     ? raw.positions
@@ -88,12 +134,23 @@ const normalizeScenePreset = (raw: any): ScenePreset | null => {
     id,
     name: String(raw.name || 'Scene').trim() || 'Scene',
     layout,
+    themeId,
+    backgroundStyle: selection.backgroundStyle,
+    frameStyle: selection.frameStyle,
+    motionStyle: selection.motionStyle,
+    layoutPack: LAYOUT_PACKS.some((pack) => pack.id === raw.layoutPack)
+      ? raw.layoutPack as LayoutPackId
+      : selection.packId,
+    brandColors: Array.isArray(raw.brandColors) && raw.brandColors.length
+      ? raw.brandColors.map((value: unknown) => String(value || '').trim()).filter(Boolean)
+      : [...DEFAULT_BRAND_COLORS],
     mainLayerId: raw.mainLayerId ? String(raw.mainLayerId) : null,
     positions,
     composerMode: typeof raw.composerMode === 'boolean' ? raw.composerMode : undefined,
     transitionMode: typeof raw.transitionMode === 'string' ? raw.transitionMode : undefined,
-    version: Number(raw.version || 1),
+    version: Number(raw.version || 2),
     cameraOrder,
+    swappedRoles: raw.swappedRoles === true,
   };
 };
 
@@ -108,11 +165,22 @@ interface StudioProps {
 }
 
 type StreamQualityPreset = 'high' | 'medium' | 'low';
-type BroadcastIntent = 'speakerFocus' | 'scriptureFocus' | 'audienceInteraction';
+type BroadcastIntent = SmartBroadcastIntent;
 type StudioStatusMsg = {
   type: 'error' | 'info' | 'warn';
   text: string;
   persistent?: boolean;
+};
+type CinematicPresetPreview = {
+  layoutTheme: LayoutThemeId;
+  appliedTheme: LayoutThemeId;
+  previewTheme: LayoutThemeId;
+  backgroundStyle: BackgroundStyleId;
+  frameStyle: FrameStyleId;
+  motionStyle: MotionStyleId;
+  layoutPack: LayoutPackId;
+  brandColors: string[];
+  swappedRoles: boolean;
 };
 type EncoderBootstrapStats = {
   recorderState: string;
@@ -154,7 +222,7 @@ const SourcePreview: React.FC<{ stream?: MediaStream }> = ({ stream }) => {
   if (!stream) {
     return <div className="w-16 h-10 bg-black/40 rounded border border-aether-700" />;
   }
-  return <video ref={ref} autoPlay muted playsInline className="w-16 h-10 object-cover rounded border border-aether-700" />;
+  return <video ref={ref} autoPlay muted playsInline className="w-16 h-10 object-contain bg-black/60 rounded border border-aether-700" />;
 };
 
 const CollapsibleSection: React.FC<{
@@ -163,8 +231,11 @@ const CollapsibleSection: React.FC<{
   defaultOpen?: boolean;
   open?: boolean;
   onToggle?: (open: boolean) => void;
+  className?: string;
+  summaryClassName?: string;
+  bodyClassName?: string;
   children: React.ReactNode;
-}> = ({ title, subtitle, defaultOpen, open, onToggle, children }) => (
+}> = ({ title, subtitle, defaultOpen, open, onToggle, className, summaryClassName, bodyClassName, children }) => (
   <details
     open={open ?? defaultOpen}
     onToggle={(e) => {
@@ -172,16 +243,16 @@ const CollapsibleSection: React.FC<{
       const el = e.currentTarget as HTMLDetailsElement;
       onToggle(el.open);
     }}
-    className="bg-aether-800/40 border border-aether-700 rounded-lg"
+    className={className || "bg-aether-800/40 border border-aether-700 rounded-lg"}
   >
-    <summary className="cursor-pointer list-none px-3 py-2 flex items-center justify-between">
+    <summary className={summaryClassName || "cursor-pointer list-none px-3 py-2 flex items-center justify-between"}>
       <div>
         <div className="text-[13px] font-semibold text-white">{title}</div>
         {subtitle && <div className="text-xs text-gray-300">{subtitle}</div>}
       </div>
       <div className="text-xs text-gray-400">Toggle</div>
     </summary>
-    <div className="px-3 pb-3 pt-1 space-y-2">
+    <div className={bodyClassName || "px-3 pb-3 pt-1 space-y-2"}>
       {children}
     </div>
   </details>
@@ -236,6 +307,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsPos, setSettingsPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [inputsSection, setInputsSection] = useState<string>('input-manager');
+  const [windowViewport, setWindowViewport] = useState(() => ({
+    width: typeof window !== 'undefined' ? window.innerWidth : 0,
+    height: typeof window !== 'undefined' ? window.innerHeight : 0,
+  }));
+  const [operatorRailSize, setOperatorRailSize] = useState({ width: 0, height: 0 });
   const [showDeviceSelector, setShowDeviceSelector] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
@@ -294,6 +370,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const [cameraSources, setCameraSources] = useState<CameraSource[]>([]);
   const [activePhoneSourceId, setActivePhoneSourceId] = useState<string | null>(null);
   const [composerMode, setComposerMode] = useState(false);
+  const [composerMainLayerId, setComposerMainLayerId] = useState<string | null>(null);
   const [autoDirectorOn, setAutoDirectorOn] = useState(() => localStorage.getItem('aether_auto_director') === 'true');
   const [autoDirectorInterval, setAutoDirectorInterval] = useState(() => Number(localStorage.getItem('aether_auto_director_interval') || 12));
   const [autoDirectorMode, setAutoDirectorMode] = useState<'sequential' | 'random' | 'audio_reactive'>(() => (localStorage.getItem('aether_auto_director_mode') as any) || 'sequential');
@@ -346,10 +423,101 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     }
   });
   const [presetName, setPresetName] = useState('Main + Thumbs');
-  const [layoutTemplate, setLayoutTemplate] = useState<ComposerLayoutTemplate>('main_thumbs');
+  const [layoutTheme, setLayoutTheme] = useState<LayoutThemeId>(() => {
+    const raw = localStorage.getItem('aether_layout_theme');
+    return LAYOUT_THEMES.some((theme) => theme.id === raw) ? raw as LayoutThemeId : DEFAULT_LAYOUT_THEME_ID;
+  });
+  const [previewTheme, setPreviewTheme] = useState<LayoutThemeId>(() => {
+    const raw = localStorage.getItem('aether_preview_theme');
+    return LAYOUT_THEMES.some((theme) => theme.id === raw) ? raw as LayoutThemeId : DEFAULT_LAYOUT_THEME_ID;
+  });
+  const [appliedTheme, setAppliedTheme] = useState<LayoutThemeId>(() => {
+    const raw = localStorage.getItem('aether_applied_theme');
+    return LAYOUT_THEMES.some((theme) => theme.id === raw) ? raw as LayoutThemeId : DEFAULT_LAYOUT_THEME_ID;
+  });
+  const [backgroundStyle, setBackgroundStyle] = useState<BackgroundStyleId>(() => {
+    const raw = localStorage.getItem('aether_background_style');
+    return ['blurred_camera', 'gradient_motion', 'brand_wave', 'light_studio'].includes(raw || '')
+      ? raw as BackgroundStyleId
+      : getLayoutThemeDefinition(DEFAULT_LAYOUT_THEME_ID).backgroundStyle;
+  });
+  const [frameStyle, setFrameStyle] = useState<FrameStyleId>(() => {
+    const raw = localStorage.getItem('aether_frame_style');
+    return ['floating', 'flat', 'glass'].includes(raw || '')
+      ? raw as FrameStyleId
+      : getLayoutThemeDefinition(DEFAULT_LAYOUT_THEME_ID).frameStyle;
+  });
+  const [motionStyle, setMotionStyle] = useState<MotionStyleId>(() => {
+    const raw = localStorage.getItem('aether_motion_style');
+    return ['smooth', 'snappy', 'gentle'].includes(raw || '')
+      ? raw as MotionStyleId
+      : getLayoutThemeDefinition(DEFAULT_LAYOUT_THEME_ID).motionStyle;
+  });
+  const [layoutPack, setLayoutPack] = useState<LayoutPackId>(() => {
+    const raw = localStorage.getItem('aether_layout_pack');
+    return LAYOUT_PACKS.some((pack) => pack.id === raw)
+      ? raw as LayoutPackId
+      : getLayoutThemeDefinition(DEFAULT_LAYOUT_THEME_ID).packId;
+  });
+  const [layoutTemplate, setLayoutTemplate] = useState<ComposerLayoutTemplate>(() => {
+    return getLayoutThemeDefinition(DEFAULT_LAYOUT_THEME_ID).layoutTemplate;
+  });
+  const [previewLayoutTemplate, setPreviewLayoutTemplate] = useState<ComposerLayoutTemplate>(() => {
+    return getLayoutThemeDefinition(previewTheme).layoutTemplate;
+  });
+  const [previewBackgroundStyle, setPreviewBackgroundStyle] = useState<BackgroundStyleId>(() => {
+    return getLayoutThemeDefinition(previewTheme).backgroundStyle;
+  });
+  const [previewFrameStyle, setPreviewFrameStyle] = useState<FrameStyleId>(() => {
+    return getLayoutThemeDefinition(previewTheme).frameStyle;
+  });
+  const [previewMotionStyle, setPreviewMotionStyle] = useState<MotionStyleId>(() => {
+    return getLayoutThemeDefinition(previewTheme).motionStyle;
+  });
+  const [previewLayoutPack, setPreviewLayoutPack] = useState<LayoutPackId>(() => {
+    return getLayoutThemeDefinition(previewTheme).packId;
+  });
+  const [brandColors, setBrandColors] = useState<string[]>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('aether_brand_colors') || '[]');
+      return Array.isArray(raw) && raw.length ? raw.map((value: unknown) => String(value || '').trim()).filter(Boolean) : [...DEFAULT_BRAND_COLORS];
+    } catch {
+      return [...DEFAULT_BRAND_COLORS];
+    }
+  });
+  const [swapPending, setSwapPending] = useState(() => localStorage.getItem('aether_layout_swapped') === 'true');
+  const [smartLayoutEnabled, setSmartLayoutEnabled] = useState(() => localStorage.getItem('aether_smart_layout_enabled') !== 'false');
+  const [luminaState, setLuminaState] = useState<NormalizedLuminaState>({
+    event: 'idle',
+    sceneName: null,
+    contentMode: 'idle',
+    hasProjectorContent: false,
+    title: null,
+    presenter: null,
+    shouldAutoSwitch: true,
+    payload: {},
+    ts: Date.now(),
+  });
+  const [composerRenderMeta, setComposerRenderMeta] = useState<ComposerLayoutRenderMeta>(() => (
+    computeComposerLayout({
+      layoutTemplate: getLayoutThemeDefinition(DEFAULT_LAYOUT_THEME_ID).layoutTemplate,
+      cameraLayerIds: [],
+      canvasWidth: 1920,
+      canvasHeight: 1080,
+      maxComposedCameras: MAX_COMPOSED_CAMERAS,
+      themeId: DEFAULT_LAYOUT_THEME_ID,
+      backgroundStyle: getLayoutThemeDefinition(DEFAULT_LAYOUT_THEME_ID).backgroundStyle,
+      frameStyle: getLayoutThemeDefinition(DEFAULT_LAYOUT_THEME_ID).frameStyle,
+      motionStyle: getLayoutThemeDefinition(DEFAULT_LAYOUT_THEME_ID).motionStyle,
+      aspectRatioBehavior: getLayoutThemeDefinition(DEFAULT_LAYOUT_THEME_ID).aspectRatioBehavior,
+      safeMargins: getLayoutThemeDefinition(DEFAULT_LAYOUT_THEME_ID).safeMargins,
+    }).renderMeta
+  ));
+  const [backgroundSourceLayerId, setBackgroundSourceLayerId] = useState<string | null>(null);
   const [intentDirectorOn, setIntentDirectorOn] = useState(() => localStorage.getItem('aether_intent_director_on') === 'true');
   const [intentDirectorStatus, setIntentDirectorStatus] = useState('Idle');
   const [intentCooldownMs, setIntentCooldownMs] = useState(() => Number(localStorage.getItem('aether_intent_cooldown_ms') || 1200));
+  const [aiHealth, setAiHealth] = useState<AiHealthStatus | null>(null);
 
   const [transitionMode, setTransitionMode] = useState<'cut' | 'fade' | 'dip_white'>(() => {
     return (localStorage.getItem('aether_transition_mode') as any) || 'cut';
@@ -403,6 +571,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const localRecorderRef = useRef<MediaRecorder | null>(null);
   const localChunksRef = useRef<Blob[]>([]);
   const settingsPanelRef = useRef<HTMLDivElement | null>(null);
+  const operatorRailRef = useRef<HTMLDivElement | null>(null);
   const settingsDragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
 
   // Audio Refs
@@ -428,6 +597,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamingSocketRef = useRef<WebSocket | null>(null);
   const peerRef = useRef<Peer | null>(null);
+  const layersRef = useRef<Layer[]>([]);
   const cameraSourcesRef = useRef<CameraSource[]>([]);
   const cloudDisconnectTimerRef = useRef<number | null>(null);
   const cloudSyncTimerRef = useRef<number | null>(null);
@@ -443,6 +613,22 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const transitionRafRef = useRef<number | null>(null);
   const transitionTokenRef = useRef<number>(0);
   const layoutTemplateRef = useRef<ComposerLayoutTemplate>(layoutTemplate);
+  const layoutThemeRef = useRef<LayoutThemeId>(layoutTheme);
+  const backgroundStyleRef = useRef<BackgroundStyleId>(backgroundStyle);
+  const frameStyleRef = useRef<FrameStyleId>(frameStyle);
+  const motionStyleRef = useRef<MotionStyleId>(motionStyle);
+  const layoutPackRef = useRef<LayoutPackId>(layoutPack);
+  const brandColorsRef = useRef<string[]>(brandColors);
+  const swapPendingRef = useRef<boolean>(swapPending);
+  const composerMainLayerIdRef = useRef<string | null>(composerMainLayerId);
+  const smartLayoutEnabledRef = useRef<boolean>(smartLayoutEnabled);
+  const previewThemeRef = useRef<LayoutThemeId>(previewTheme);
+  const previewLayoutTemplateRef = useRef<ComposerLayoutTemplate>(previewLayoutTemplate);
+  const previewBackgroundStyleRef = useRef<BackgroundStyleId>(previewBackgroundStyle);
+  const previewFrameStyleRef = useRef<FrameStyleId>(previewFrameStyle);
+  const previewMotionStyleRef = useRef<MotionStyleId>(previewMotionStyle);
+  const previewLayoutPackRef = useRef<LayoutPackId>(previewLayoutPack);
+  const appliedThemeRef = useRef<LayoutThemeId>(appliedTheme);
   const intentDirectorOnRef = useRef<boolean>(intentDirectorOn);
   const intentLastSwitchedAtRef = useRef<number>(0);
   const intentLastAppliedRef = useRef<BroadcastIntent | null>(null);
@@ -480,6 +666,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   }, []);
 
   useEffect(() => {
+    layersRef.current = layers;
+  }, [layers]);
+
+  useEffect(() => {
     cameraSourcesRef.current = cameraSources;
   }, [cameraSources]);
 
@@ -488,8 +678,124 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   }, [layoutTemplate]);
 
   useEffect(() => {
+    layoutThemeRef.current = layoutTheme;
+  }, [layoutTheme]);
+
+  useEffect(() => {
+    backgroundStyleRef.current = backgroundStyle;
+  }, [backgroundStyle]);
+
+  useEffect(() => {
+    frameStyleRef.current = frameStyle;
+  }, [frameStyle]);
+
+  useEffect(() => {
+    motionStyleRef.current = motionStyle;
+  }, [motionStyle]);
+
+  useEffect(() => {
+    layoutPackRef.current = layoutPack;
+  }, [layoutPack]);
+
+  useEffect(() => {
+    brandColorsRef.current = brandColors;
+  }, [brandColors]);
+
+  useEffect(() => {
+    swapPendingRef.current = swapPending;
+  }, [swapPending]);
+
+  useEffect(() => {
+    composerMainLayerIdRef.current = composerMainLayerId;
+  }, [composerMainLayerId]);
+
+  useEffect(() => {
+    smartLayoutEnabledRef.current = smartLayoutEnabled;
+  }, [smartLayoutEnabled]);
+
+  useEffect(() => {
+    previewThemeRef.current = previewTheme;
+  }, [previewTheme]);
+
+  useEffect(() => {
+    previewLayoutTemplateRef.current = previewLayoutTemplate;
+  }, [previewLayoutTemplate]);
+
+  useEffect(() => {
+    previewBackgroundStyleRef.current = previewBackgroundStyle;
+  }, [previewBackgroundStyle]);
+
+  useEffect(() => {
+    previewFrameStyleRef.current = previewFrameStyle;
+  }, [previewFrameStyle]);
+
+  useEffect(() => {
+    previewMotionStyleRef.current = previewMotionStyle;
+  }, [previewMotionStyle]);
+
+  useEffect(() => {
+    previewLayoutPackRef.current = previewLayoutPack;
+  }, [previewLayoutPack]);
+
+  useEffect(() => {
+    appliedThemeRef.current = appliedTheme;
+  }, [appliedTheme]);
+
+  useEffect(() => {
     intentDirectorOnRef.current = intentDirectorOn;
   }, [intentDirectorOn]);
+
+  const refreshAiHealth = useCallback(async () => {
+    const next = await checkAiAvailability().catch(() => ({
+      ok: false,
+      reason: 'unreachable',
+      baseUrl: '',
+      isLocal: true,
+    } satisfies AiHealthStatus));
+    setAiHealth(next);
+    return next;
+  }, []);
+
+  useEffect(() => {
+    if (rightPanelTab !== 'ai' && rightPanelTab !== 'inputs') return;
+    void refreshAiHealth();
+  }, [rightPanelTab, refreshAiHealth]);
+
+  useEffect(() => {
+    const handleWindowResize = () => {
+      setWindowViewport({ width: window.innerWidth, height: window.innerHeight });
+    };
+    window.addEventListener('resize', handleWindowResize);
+    return () => window.removeEventListener('resize', handleWindowResize);
+  }, []);
+
+  const syncOperatorRailSize = useCallback(() => {
+    const rail = operatorRailRef.current;
+    if (!rail) return;
+    const width = rail.clientWidth || 0;
+    const height = rail.clientHeight || 0;
+    setOperatorRailSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+  }, []);
+
+  useEffect(() => {
+    syncOperatorRailSize();
+    const rail = operatorRailRef.current;
+    if (!rail) return;
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => syncOperatorRailSize());
+      resizeObserver.observe(rail);
+    }
+    return () => resizeObserver?.disconnect();
+  }, [syncOperatorRailSize]);
+
+  useEffect(() => {
+    if (rightPanelTab !== 'inputs') return;
+    const raf = window.requestAnimationFrame(() => {
+      syncOperatorRailSize();
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [rightPanelTab, inputsSection, composerMode, syncOperatorRailSize]);
 
   const handleSettingsDrag = useCallback((e: MouseEvent) => {
     const drag = settingsDragRef.current;
@@ -584,6 +890,30 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     localStorage.setItem('aether_intent_director_on', String(intentDirectorOn));
     localStorage.setItem('aether_intent_cooldown_ms', String(intentCooldownMs || 1200));
   }, [autoDirectorOn, autoDirectorInterval, autoDirectorMode, intentDirectorOn, intentCooldownMs]);
+
+  useEffect(() => {
+    localStorage.setItem('aether_layout_theme', layoutTheme);
+    localStorage.setItem('aether_preview_theme', previewTheme);
+    localStorage.setItem('aether_applied_theme', appliedTheme);
+    localStorage.setItem('aether_background_style', backgroundStyle);
+    localStorage.setItem('aether_frame_style', frameStyle);
+    localStorage.setItem('aether_motion_style', motionStyle);
+    localStorage.setItem('aether_layout_pack', layoutPack);
+    localStorage.setItem('aether_layout_swapped', swapPending ? 'true' : 'false');
+    localStorage.setItem('aether_smart_layout_enabled', smartLayoutEnabled ? 'true' : 'false');
+    localStorage.setItem('aether_brand_colors', JSON.stringify(brandColors));
+  }, [
+    layoutTheme,
+    previewTheme,
+    appliedTheme,
+    backgroundStyle,
+    frameStyle,
+    motionStyle,
+    layoutPack,
+    swapPending,
+    smartLayoutEnabled,
+    brandColors,
+  ]);
 
   useEffect(() => {
     localStorage.setItem('aether_lower_third_name', lowerThirdName);
@@ -1403,21 +1733,28 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             // Handle Lumina Control Bridge Events
             if (msg?.type === "lumina_event") {
               const { event, payload } = msg;
+              const nextLuminaState = normalizeLuminaState(event, payload);
+              setLuminaState(nextLuminaState);
               routeIntentSignalRef.current(event, payload);
               if (event === "lumina.scene.switch") {
                 const targetScene = payload?.sceneName || payload?.target;
-                if (targetScene && activeComposerScene?.name !== targetScene) {
-                  const preset = composerScenes.find((s) => s.name?.toLowerCase() === targetScene?.toLowerCase());
+                if (targetScene) {
+                  const preset = scenePresets.find((scene) => scene.name?.toLowerCase() === String(targetScene).toLowerCase());
                   if (preset) {
-                    handleSceneSelect(preset.id);
+                    runTransition(() => loadScenePresetById(preset.id));
                     setStatusMsg({ type: "info", text: `Lumina Scene Transition: ${preset.name}` });
                   } else {
-                    setStatusMsg({ type: "warn", text: `Lumina req scene '${targetScene}' not found in composition.` });
+                    const matchingTheme = LAYOUT_THEMES.find((theme) => theme.name.toLowerCase() === String(targetScene).toLowerCase());
+                    if (matchingTheme) {
+                      runTransition(() => applySelectedLayoutTheme(matchingTheme.id));
+                      setStatusMsg({ type: "info", text: `Lumina Theme Transition: ${matchingTheme.name}` });
+                    } else {
+                      setStatusMsg({ type: "warn", text: `Lumina requested scene '${targetScene}' but no preset or theme matched.` });
+                    }
                   }
                 }
               } else if (event === "lumina.state.sync") {
-                // Optional: visual indicator that lumina is synced
-                // setStatusMsg({ type: "info", text: "Lumina Auto-Sync active." });
+                setStatusMsg({ type: "info", text: `Lumina sync: ${nextLuminaState.contentMode}` });
               }
             }
 
@@ -1599,6 +1936,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         }
       ]);
       setSelectedLayerId(layerId);
+      setComposerMainLayerId((prev) => prev || layerId);
       setShowDeviceSelector(false);
     } catch (err) {
       const name = (err as any)?.name || '';
@@ -1621,6 +1959,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         setAudioTracks(prev => [...prev, { id: generateId(), label: 'System Audio', volume: 80, muted: false, isMic: false, noiseCancellation: false, stream }]);
       }
       setSelectedLayerId(newLayer.id);
+      setComposerMainLayerId((prev) => prev || newLayer.id);
     } catch (err: any) {
       if (err.name !== 'NotAllowedError') setStatusMsg({ type: 'error', text: err.message });
     }
@@ -1652,6 +1991,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const deleteLayer = (id: string) => {
     setLayers(prev => prev.filter(l => l.id !== id));
     if (selectedLayerId === id) setSelectedLayerId(null);
+    if (composerMainLayerIdRef.current === id) setComposerMainLayerId(null);
   };
 
   const updateAudioTrack = (id: string, updates: Partial<AudioTrackConfig>) => setAudioTracks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
@@ -2647,6 +2987,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     if (src?.layerId && selectedLayerId === src.layerId) {
       setSelectedLayerId(null);
     }
+    if (src?.layerId && composerMainLayerIdRef.current === src.layerId) {
+      setComposerMainLayerId(null);
+    }
     if (src?.kind === 'phone') {
       const micId = `mobile-mic-${id}`;
       setAudioTracks(prev => prev.filter(t => t.id !== micId));
@@ -2683,9 +3026,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         : { ...l, visible: l.visible ?? true }
       );
     });
+    setComposerMainLayerId(layerId);
     setSelectedLayerId(layerId);
     if (composerMode) {
-      applyComposerLayoutState(layerId);
+      applyComposerLayoutState(layerId, undefined, undefined, { persistMainLayerId: true });
     }
   };
 
@@ -2832,48 +3176,101 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     setDestinations(prev => prev.filter(d => d.id !== id));
   };
 
-  const resolveOrderedCameraLayerIds = useCallback((overrideOrder?: string[]) => {
-    const fromSources = cameraSourcesRef.current
+  const resolveOrderedComposerLayerIds = useCallback((overrideOrder?: string[]) => {
+    const cameraLayerIds = cameraSourcesRef.current
       .map((source) => source.layerId)
       .filter((layerId): layerId is string => !!layerId);
-    if (!Array.isArray(overrideOrder) || overrideOrder.length === 0) return fromSources;
+    const screenLayerIds = layersRef.current
+      .filter((layer) => layer.type === SourceType.SCREEN)
+      .map((layer) => layer.id);
+    const preferredScreenId = composerMainLayerId && screenLayerIds.includes(composerMainLayerId) ? composerMainLayerId : null;
+    const luminaPrimaryId = preferredScreenId || (luminaState.hasProjectorContent ? screenLayerIds[0] || null : null);
+    const baseOrder = luminaPrimaryId
+      ? [luminaPrimaryId, ...cameraLayerIds, ...screenLayerIds.filter((id) => id !== luminaPrimaryId)]
+      : [...cameraLayerIds, ...screenLayerIds];
+    const uniqueBase = Array.from(new Set(baseOrder.filter(Boolean)));
+    if (!Array.isArray(overrideOrder) || overrideOrder.length === 0) return uniqueBase;
 
     const uniqueOverride = Array.from(new Set(overrideOrder.map((id) => String(id || '').trim()).filter(Boolean)));
-    const prioritized = uniqueOverride.filter((id) => fromSources.includes(id));
-    const remaining = fromSources.filter((id) => !prioritized.includes(id));
+    const prioritized = uniqueOverride.filter((id) => uniqueBase.includes(id));
+    const remaining = uniqueBase.filter((id) => !prioritized.includes(id));
     return [...prioritized, ...remaining];
-  }, []);
+  }, [composerMainLayerId, luminaState.hasProjectorContent]);
 
   const applyComposerLayoutState = useCallback((
     mainOverride?: string | null,
     layoutOverride?: ComposerLayoutTemplate,
-    cameraOrderOverride?: string[]
+    cameraOrderOverride?: string[],
+    options?: {
+      themeId?: LayoutThemeId | null;
+      swappedRoles?: boolean;
+      backgroundStyle?: BackgroundStyleId;
+      frameStyle?: FrameStyleId;
+      motionStyle?: MotionStyleId;
+      persistMainLayerId?: boolean;
+    }
   ) => {
-    const effectiveTemplate = layoutOverride || layoutTemplateRef.current;
-    if (effectiveTemplate === 'freeform') return;
+    const effectiveThemeId = options?.themeId || layoutThemeRef.current;
+    const selection = buildLayoutSelection(effectiveThemeId, {
+      backgroundStyle: options?.backgroundStyle || backgroundStyleRef.current,
+      frameStyle: options?.frameStyle || frameStyleRef.current,
+      motionStyle: options?.motionStyle || motionStyleRef.current,
+    });
+    const effectiveTemplate = layoutOverride || selection.layoutTemplate;
+    const mediaLayerIds = resolveOrderedComposerLayerIds(cameraOrderOverride);
+    const resolvedMainLayerId = resolveComposerMainLayerId({
+      mediaLayerIds,
+      composerMainLayerId: mainOverride ?? composerMainLayerIdRef.current,
+      selectedLayerId: selectedLayerId,
+    });
 
-    const cameraLayerIds = resolveOrderedCameraLayerIds(cameraOrderOverride);
-    if (cameraLayerIds.length === 0) return;
+    if (mediaLayerIds.length === 0) {
+      setComposerRenderMeta(
+        computeComposerLayout({
+          layoutTemplate: effectiveTemplate,
+          cameraLayerIds: [],
+          canvasWidth: 1920,
+          canvasHeight: 1080,
+          maxComposedCameras: MAX_COMPOSED_CAMERAS,
+          themeId: effectiveThemeId,
+          backgroundStyle: selection.backgroundStyle,
+          frameStyle: selection.frameStyle,
+          motionStyle: selection.motionStyle,
+          aspectRatioBehavior: selection.aspectRatioBehavior,
+          safeMargins: selection.safeMargins,
+          swappedRoles: options?.swappedRoles ?? swapPendingRef.current,
+        }).renderMeta
+      );
+      return;
+    }
 
     const result = computeComposerLayout({
       layoutTemplate: effectiveTemplate,
-      cameraLayerIds,
-      selectedMainLayerId: mainOverride || selectedLayerId,
+      cameraLayerIds: mediaLayerIds,
+      selectedMainLayerId: resolvedMainLayerId,
       cameraOrderOverride,
       canvasWidth: 1920,
       canvasHeight: 1080,
       maxComposedCameras: MAX_COMPOSED_CAMERAS,
+      themeId: effectiveThemeId,
+      backgroundStyle: selection.backgroundStyle,
+      frameStyle: selection.frameStyle,
+      motionStyle: selection.motionStyle,
+      aspectRatioBehavior: selection.aspectRatioBehavior,
+      safeMargins: selection.safeMargins,
+      swappedRoles: options?.swappedRoles ?? swapPendingRef.current,
     });
-
-    if (result.resolvedMainLayerId && result.resolvedMainLayerId !== selectedLayerId) {
-      setSelectedLayerId(result.resolvedMainLayerId);
+    setComposerRenderMeta(result.renderMeta);
+    setBackgroundSourceLayerId(result.resolvedMainLayerId || mediaLayerIds[0] || null);
+    if (options?.persistMainLayerId && result.resolvedMainLayerId && result.resolvedMainLayerId !== composerMainLayerIdRef.current) {
+      setComposerMainLayerId(result.resolvedMainLayerId);
     }
 
     const placementById = result.placements;
-    const cameraSet = new Set(cameraLayerIds);
+    const mediaSet = new Set(mediaLayerIds);
     setLayers((prev) =>
       prev.map((layer) => {
-        if (!cameraSet.has(layer.id)) return layer;
+        if (!mediaSet.has(layer.id)) return layer;
         const placement = placementById[layer.id];
         if (!placement) return { ...layer, visible: false };
 
@@ -2898,26 +3295,105 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         const hiddenCount = result.hiddenLayerIds.length;
         setStatusMsg({
           type: 'info',
-          text: `${hiddenCount} camera${hiddenCount > 1 ? 's are' : ' is'} hidden by layout cap.`,
+          text: `${hiddenCount} source${hiddenCount > 1 ? 's are' : ' is'} hidden by layout cap.`,
         });
       }
     }
-  }, [resolveOrderedCameraLayerIds, selectedLayerId]);
+  }, [resolveOrderedComposerLayerIds, selectedLayerId]);
+
+  const selectLayoutTheme = useCallback((themeId: LayoutThemeId) => {
+    const theme = getLayoutThemeDefinition(themeId);
+    setPreviewTheme(themeId);
+    setPreviewLayoutPack(theme.packId);
+    setPreviewLayoutTemplate(theme.layoutTemplate);
+    setPreviewBackgroundStyle(theme.backgroundStyle);
+    setPreviewFrameStyle(theme.frameStyle);
+    setPreviewMotionStyle(theme.motionStyle);
+  }, []);
+
+  const previewSelectedLayoutTheme = useCallback(() => {
+    const nextThemeId = previewThemeRef.current;
+    const nextMainLayerId = composerMainLayerIdRef.current || selectedLayerId || null;
+    setComposerMode(true);
+    setLayoutTheme(nextThemeId);
+    setLayoutPack(previewLayoutPackRef.current);
+    setLayoutTemplate(previewLayoutTemplateRef.current);
+    setBackgroundStyle(previewBackgroundStyleRef.current);
+    setFrameStyle(previewFrameStyleRef.current);
+    setMotionStyle(previewMotionStyleRef.current);
+    applyComposerLayoutState(nextMainLayerId, previewLayoutTemplateRef.current, undefined, {
+      themeId: nextThemeId,
+      backgroundStyle: previewBackgroundStyleRef.current,
+      frameStyle: previewFrameStyleRef.current,
+      motionStyle: previewMotionStyleRef.current,
+      swappedRoles: swapPendingRef.current,
+      persistMainLayerId: true,
+    });
+  }, [applyComposerLayoutState, selectedLayerId]);
+
+  const applySelectedLayoutTheme = useCallback((themeId?: LayoutThemeId) => {
+    const nextMainLayerId = composerMainLayerIdRef.current || selectedLayerId || null;
+    if (themeId) {
+      const theme = getLayoutThemeDefinition(themeId);
+      setComposerMode(true);
+      setLayoutTheme(themeId);
+      setPreviewTheme(themeId);
+      setAppliedTheme(themeId);
+      setLayoutPack(theme.packId);
+      setPreviewLayoutPack(theme.packId);
+      setLayoutTemplate(theme.layoutTemplate);
+      setPreviewLayoutTemplate(theme.layoutTemplate);
+      setBackgroundStyle(theme.backgroundStyle);
+      setPreviewBackgroundStyle(theme.backgroundStyle);
+      setFrameStyle(theme.frameStyle);
+      setPreviewFrameStyle(theme.frameStyle);
+      setMotionStyle(theme.motionStyle);
+      setPreviewMotionStyle(theme.motionStyle);
+      applyComposerLayoutState(nextMainLayerId, theme.layoutTemplate, undefined, {
+        themeId,
+        backgroundStyle: theme.backgroundStyle,
+        frameStyle: theme.frameStyle,
+        motionStyle: theme.motionStyle,
+        swappedRoles: swapPendingRef.current,
+        persistMainLayerId: true,
+      });
+      return;
+    }
+
+    const nextThemeId = previewThemeRef.current;
+    setComposerMode(true);
+    setLayoutTheme(nextThemeId);
+    setAppliedTheme(nextThemeId);
+    setLayoutPack(previewLayoutPackRef.current);
+    setLayoutTemplate(previewLayoutTemplateRef.current);
+    setBackgroundStyle(previewBackgroundStyleRef.current);
+    setFrameStyle(previewFrameStyleRef.current);
+    setMotionStyle(previewMotionStyleRef.current);
+    applyComposerLayoutState(nextMainLayerId, previewLayoutTemplateRef.current, undefined, {
+      themeId: nextThemeId,
+      backgroundStyle: previewBackgroundStyleRef.current,
+      frameStyle: previewFrameStyleRef.current,
+      motionStyle: previewMotionStyleRef.current,
+      swappedRoles: swapPendingRef.current,
+      persistMainLayerId: true,
+    });
+  }, [applyComposerLayoutState, selectedLayerId]);
 
   const applyIntentLayout = useCallback((intent: BroadcastIntent, reason: string) => {
-    if (!intentDirectorOnRef.current) return;
+    if (!intentDirectorOnRef.current || !smartLayoutEnabledRef.current) return;
     const now = Date.now();
     const cooldown = Math.max(200, Number(intentCooldownMs || 1200));
     if (now - intentLastSwitchedAtRef.current < cooldown) return;
     if (intentLastAppliedRef.current === intent && now - intentLastSwitchedAtRef.current < cooldown * 2) return;
 
-    const layoutByIntent: Record<BroadcastIntent, ComposerLayoutTemplate | null> = {
+    const themeByIntent: Record<BroadcastIntent, LayoutThemeId | null> = {
       speakerFocus: 'speaker_focus',
       scriptureFocus: 'scripture_focus',
+      broadcastFocus: luminaState.hasProjectorContent ? 'sermon_split' : 'broadcast_studio',
       audienceInteraction: null,
     };
 
-    const targetLayout = layoutByIntent[intent];
+    const targetTheme = themeByIntent[intent];
     intentLastSwitchedAtRef.current = now;
     intentLastAppliedRef.current = intent;
     setIntentDirectorStatus(`${intent} · ${reason}`);
@@ -2926,18 +3402,30 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       setPinnedVisibility(true);
     }
 
-    if (!targetLayout) return;
+    if (!targetTheme) return;
 
     runTransition(() => {
-      setComposerMode(true);
-      setLayoutTemplate(targetLayout);
-      applyComposerLayoutState(selectedLayerId || null, targetLayout);
+      setSwapPending(false);
+      applySelectedLayoutTheme(targetTheme);
     });
-  }, [applyComposerLayoutState, intentCooldownMs, pinnedMessage, selectedLayerId]);
+  }, [applySelectedLayoutTheme, intentCooldownMs, luminaState.hasProjectorContent, pinnedMessage]);
 
   const routeIntentSignal = useCallback((signalName: string, payload?: any) => {
     const eventName = String(signalName || '').toLowerCase();
     if (!eventName || !intentDirectorOnRef.current) return;
+
+    const nextLuminaState = normalizeLuminaState(signalName, payload);
+    setLuminaState(nextLuminaState);
+
+    const inferredIntent = inferIntentFromLuminaState(nextLuminaState);
+    const inferredTheme = inferThemeFromLuminaState(nextLuminaState);
+    if (inferredTheme) {
+      setIntentDirectorStatus(`lumina ${nextLuminaState.contentMode}`);
+    }
+    if (inferredIntent) {
+      applyIntentLayout(inferredIntent, signalName);
+      return;
+    }
 
     if (
       eventName.includes('scripture') ||
@@ -2946,6 +3434,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       payload?.scripture === true
     ) {
       applyIntentLayout('scriptureFocus', signalName);
+      return;
+    }
+
+    if (
+      eventName.includes('sermon') ||
+      eventName.includes('presentation') ||
+      payload?.projectorActive === true
+    ) {
+      applyIntentLayout('broadcastFocus', signalName);
       return;
     }
 
@@ -2986,10 +3483,17 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         id: generateId(),
         name: presetName.trim() || `Preset ${prev.length + 1}`,
         layout: layoutTemplate,
-        mainLayerId: selectedLayerId,
+        themeId: appliedTheme,
+        backgroundStyle,
+        frameStyle,
+        motionStyle,
+        layoutPack,
+        brandColors,
+        mainLayerId: composerMainLayerId || selectedLayerId,
         positions,
         version: 2,
-        cameraOrder: resolveOrderedCameraLayerIds(),
+        cameraOrder: resolveOrderedComposerLayerIds(),
+        swappedRoles: swapPending,
       }
     ]);
     setStatusMsg({ type: 'info', text: 'Scene preset saved.' });
@@ -3001,6 +3505,21 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
     if (preset.layout === 'freeform') {
       setComposerMode(false);
+      setAppliedTheme(preset.themeId);
+      setLayoutTheme(preset.themeId);
+      setPreviewTheme(preset.themeId);
+      setPreviewLayoutTemplate('freeform');
+      setBackgroundStyle(preset.backgroundStyle);
+      setPreviewBackgroundStyle(preset.backgroundStyle);
+      setFrameStyle(preset.frameStyle);
+      setPreviewFrameStyle(preset.frameStyle);
+      setMotionStyle(preset.motionStyle);
+      setPreviewMotionStyle(preset.motionStyle);
+      setLayoutPack(preset.layoutPack);
+      setPreviewLayoutPack(preset.layoutPack);
+      setBrandColors(preset.brandColors);
+      setSwapPending(!!preset.swappedRoles);
+      setComposerMainLayerId(preset.mainLayerId || null);
       setLayoutTemplate('freeform');
       setLayers(prev => prev.map(l => {
         const pos = preset.positions.find(p => p.layerId === l.id);
@@ -3017,11 +3536,33 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       }));
       hiddenByLayoutRef.current = 0;
     } else {
-      const mainLayerId = preset.mainLayerId || selectedLayerId || null;
+      const mainLayerId = preset.mainLayerId || composerMainLayerIdRef.current || selectedLayerId || null;
       setComposerMode(true);
+      setAppliedTheme(preset.themeId);
+      setLayoutTheme(preset.themeId);
+      setPreviewTheme(preset.themeId);
+      setPreviewLayoutTemplate(preset.layout);
+      setBackgroundStyle(preset.backgroundStyle);
+      setPreviewBackgroundStyle(preset.backgroundStyle);
+      setFrameStyle(preset.frameStyle);
+      setPreviewFrameStyle(preset.frameStyle);
+      setMotionStyle(preset.motionStyle);
+      setPreviewMotionStyle(preset.motionStyle);
+      setLayoutPack(preset.layoutPack);
+      setPreviewLayoutPack(preset.layoutPack);
+      setBrandColors(preset.brandColors);
+      setSwapPending(!!preset.swappedRoles);
+      setComposerMainLayerId(mainLayerId);
       setLayoutTemplate(preset.layout);
       if (mainLayerId) setSelectedLayerId(mainLayerId);
-      applyComposerLayoutState(mainLayerId, preset.layout, preset.cameraOrder);
+      applyComposerLayoutState(mainLayerId, preset.layout, preset.cameraOrder, {
+        themeId: preset.themeId,
+        backgroundStyle: preset.backgroundStyle,
+        frameStyle: preset.frameStyle,
+        motionStyle: preset.motionStyle,
+        swappedRoles: preset.swappedRoles,
+        persistMainLayerId: true,
+      });
     }
 
     setStatusMsg({ type: 'info', text: `Loaded preset: ${preset.name}` });
@@ -3041,11 +3582,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     }));
   };
 
-
-  const cameraLayerSignature = cameraSources
-    .map((source) => source.layerId || '')
-    .filter(Boolean)
-    .join('|');
+  const composerLayerSignature = [
+    ...cameraSources.map((source) => source.layerId || '').filter(Boolean),
+    ...layers.filter((layer) => layer.type === SourceType.SCREEN).map((layer) => layer.id),
+  ].join('|');
 
   useEffect(() => {
     if (!composerMode || layoutTemplate === 'freeform') {
@@ -3053,11 +3593,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       return;
     }
     applyComposerLayoutState();
-  }, [composerMode, layoutTemplate, cameraLayerSignature, selectedLayerId, applyComposerLayoutState]);
+  }, [composerMode, layoutTemplate, composerLayerSignature, composerMainLayerId, applyComposerLayoutState, layoutTheme, backgroundStyle, frameStyle, motionStyle, swapPending]);
 
   const cutToNext = () => {
     if (cameraSources.length === 0) return;
-    const currentLayerId = selectedLayerId;
+    const currentLayerId = resolveProgramLayerId({
+      composerMode,
+      composerMainLayerId,
+      selectedLayerId,
+    });
     const idx = cameraSources.findIndex(s => s.layerId === currentLayerId);
     const next = cameraSources[(idx + 1) % cameraSources.length] || cameraSources[0];
     runTransition(() => makeMain(next.layerId));
@@ -3158,9 +3702,14 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
     autoDirectorTimerRef.current = window.setInterval(() => {
       lastSwitchAt = Date.now();
+      const currentProgramLayerId = resolveProgramLayerId({
+        composerMode,
+        composerMainLayerId,
+        selectedLayerId,
+      });
       if (autoDirectorMode === 'random') {
         // Random: pick a camera that isn't the current one
-        const others = cameraSources.filter(s => s.layerId && s.layerId !== selectedLayerId);
+        const others = cameraSources.filter(s => s.layerId && s.layerId !== currentProgramLayerId);
         if (others.length > 0) {
           const pick = others[Math.floor(Math.random() * others.length)];
           runTransition(() => makeMain(pick.layerId));
@@ -3178,7 +3727,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
           const db = rmsDbFromAnalyser(hg.analyser);
           if (db > bestDb) { bestDb = db; bestLayerId = s.layerId; }
         });
-        if (bestLayerId && bestLayerId !== selectedLayerId) {
+        if (bestLayerId && bestLayerId !== currentProgramLayerId) {
           runTransition(() => makeMain(bestLayerId));
         }
       } else {
@@ -3194,7 +3743,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       window.clearInterval(countdownTimer);
       setAutoDirectorCountdown(0);
     };
-  }, [autoDirectorOn, autoDirectorInterval, autoDirectorMode, cameraSources.length]);
+  }, [autoDirectorOn, autoDirectorInterval, autoDirectorMode, cameraSources.length, composerMode, composerMainLayerId, selectedLayerId]);
 
   // --- Audience message rotation ---
   useEffect(() => {
@@ -3304,6 +3853,50 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   }
 
   // --- RENDER ---
+  const previewThemeDef = getLayoutThemeDefinition(previewTheme);
+  const previewSelection = {
+    themeId: previewTheme,
+    layoutTemplate: previewLayoutTemplate,
+    backgroundStyle: previewBackgroundStyle,
+    frameStyle: previewFrameStyle,
+    motionStyle: previewMotionStyle,
+    safeMargins: previewThemeDef.safeMargins,
+    aspectRatioBehavior: previewThemeDef.aspectRatioBehavior,
+    packId: previewLayoutPack,
+  };
+  const activeThemeDef = getLayoutThemeDefinition(layoutTheme);
+  const visibleLayoutThemes = LAYOUT_THEMES.filter((theme) => theme.packId === previewLayoutPack);
+  const canvasLayoutRevision = buildCanvasLayoutRevision({
+    rightPanelTab,
+    railWidth: operatorRailSize.width,
+    railHeight: operatorRailSize.height,
+    viewportWidth: windowViewport.width,
+    viewportHeight: windowViewport.height,
+    composerMode,
+  });
+  const aiStatusText = aiHealth ? formatAiHealthMessage(aiHealth) : 'Checking local AI health...';
+  const manualLayoutOptions = [
+    { id: 'main_thumbs' as const, label: 'Main + Thumbs', icon: '▣' },
+    { id: 'side_by_side' as const, label: 'Dual Split', icon: '◫' },
+    { id: 'pip_corner' as const, label: 'PiP', icon: '△' },
+    { id: 'grid_2x2' as const, label: 'Grid', icon: '⊞' },
+    { id: 'speaker_focus' as const, label: 'Speaker', icon: '◉' },
+    { id: 'scripture_focus' as const, label: 'Scripture', icon: '◧' },
+    { id: 'sermon_split_left' as const, label: 'Split Left', icon: '◭' },
+    { id: 'sermon_split_right' as const, label: 'Split Right', icon: '◮' },
+  ];
+  const layoutPreviewState: CinematicPresetPreview = {
+    layoutTheme,
+    appliedTheme,
+    previewTheme,
+    backgroundStyle: previewBackgroundStyle,
+    frameStyle: previewFrameStyle,
+    motionStyle: previewMotionStyle,
+    layoutPack: previewLayoutPack,
+    brandColors,
+    swappedRoles: swapPending,
+  };
+
   return (
     <div className="fixed inset-0 flex flex-col w-full bg-aether-900/95 text-gray-200 font-sans selection:bg-aether-500 selection:text-white relative overflow-hidden">
       <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
@@ -3464,7 +4057,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         </div>
       </header>
 
-      <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:flex-row">
+      <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:grid md:grid-cols-[56px_minmax(0,1fr)_352px]">
         <aside className="w-14 hidden md:flex flex-col items-center py-4 gap-4 border-r border-aether-700 bg-aether-800/50">
           <SourceButton icon={<Camera size={20} />} label="Cam" onClick={() => setShowDeviceSelector(true)} />
           <SourceButton icon={<Smartphone size={20} />} label="Mob" onClick={createPhoneSource} disabled={phoneSlotsFull} />
@@ -3483,6 +4076,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
               onUpdateLayer={updateLayer}
               isPro={isPro}
               transitionOverlay={{ alpha: transitionAlpha, color: transitionColor, type: transitionMode === 'dip_white' ? 'white' : 'black' }}
+              cinematicMeta={composerRenderMeta}
+              brandColors={brandColors}
+              backgroundSourceLayerId={backgroundSourceLayerId}
+              freeformSnapEnabled={composerMode && layoutTemplate === 'freeform'}
+              layoutRevision={canvasLayoutRevision}
             />
           </div>
           <AudioMixer
@@ -3496,14 +4094,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             onOpenDeviceSettings={() => setShowDeviceSelector(true)}
           />
         </main>
-        <div className="w-full md:w-72 md:border-l border-aether-700 bg-aether-900 flex flex-col min-h-0 shrink-0">
-          <div className="flex border-b border-aether-700">
-            <button onClick={() => setRightPanelTab('properties')} className={`flex-1 py-2 text-[10px] font-bold uppercase flex items-center justify-center gap-1 ${rightPanelTab === 'properties' ? 'bg-aether-800 text-white' : 'text-gray-500'}`}><Sliders size={12} /> Prop</button>
-            <button onClick={() => setRightPanelTab('inputs')} className={`flex-1 py-2 text-[10px] font-bold uppercase flex items-center justify-center gap-1 ${rightPanelTab === 'inputs' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Camera size={12} /> In</button>
-            <button onClick={() => setRightPanelTab('ai')} className={`flex-1 py-2 text-[10px] font-bold uppercase flex items-center justify-center gap-1 ${rightPanelTab === 'ai' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Sparkles size={12} /> AI</button>
-            <button onClick={() => setRightPanelTab('ops')} className={`flex-1 py-2 text-[10px] font-bold uppercase flex items-center justify-center gap-1 ${rightPanelTab === 'ops' ? 'bg-aether-800 text-aether-400' : 'text-gray-500'}`}><Shield size={12} /> Ops</button>
+        <div ref={operatorRailRef} className="h-full min-h-0 w-full shrink-0 border-t border-aether-700 bg-aether-900 md:border-l md:border-t-0">
+          <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(4,8,18,0.98),rgba(2,6,14,0.98))] shadow-[-18px_0_40px_rgba(0,0,0,0.28)]">
+          <div className="flex shrink-0 border-b border-[#163047] bg-[#050d18]">
+            <button onClick={() => setRightPanelTab('properties')} className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-[0.18em] flex items-center justify-center gap-1.5 ${rightPanelTab === 'properties' ? 'bg-[#091525] text-white' : 'text-gray-500 hover:text-gray-300'}`}><Sliders size={12} /> Prop</button>
+            <button onClick={() => setRightPanelTab('inputs')} className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-[0.18em] flex items-center justify-center gap-1.5 ${rightPanelTab === 'inputs' ? 'bg-[#091525] text-aether-300' : 'text-gray-500 hover:text-gray-300'}`}><Camera size={12} /> In</button>
+            <button onClick={() => setRightPanelTab('ai')} className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-[0.18em] flex items-center justify-center gap-1.5 ${rightPanelTab === 'ai' ? 'bg-[#091525] text-aether-300' : 'text-gray-500 hover:text-gray-300'}`}><Sparkles size={12} /> AI</button>
+            <button onClick={() => setRightPanelTab('ops')} className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-[0.18em] flex items-center justify-center gap-1.5 ${rightPanelTab === 'ops' ? 'bg-[#091525] text-aether-300' : 'text-gray-500 hover:text-gray-300'}`}><Shield size={12} /> Ops</button>
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="flex-1 min-h-0 overflow-hidden">
             {rightPanelTab === 'properties' && (
               <LayerProperties layer={layers.find(l => l.id === selectedLayerId) || null} onUpdate={updateLayer} onDelete={deleteLayer} isPro={isPro} />
             )}
@@ -3535,7 +4134,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
               />
             )}
             {rightPanelTab === 'inputs' && (
-              <div className="h-full overflow-y-auto p-3 pb-20 space-y-2">
+              <div className="h-full w-full min-w-0 overflow-hidden p-2">
 
                 {/* ── Toggle Switch Helper ── */}
                 {/* Inline CSS for custom toggle switches */}
@@ -3560,9 +4159,40 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   .status-live { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); }
                   .status-pending { background: rgba(234,179,8,0.12); color: #fbbf24; border: 1px solid rgba(234,179,8,0.25); }
                   .status-error { background: rgba(239,68,68,0.12); color: #f87171; border: 1px solid rgba(239,68,68,0.25); }
+                  .input-rail-scroll { scrollbar-gutter: stable both-edges; scrollbar-width: thin; scrollbar-color: #22d3ee #07111d; }
+                  .input-rail-scroll::-webkit-scrollbar { width: 14px; }
+                  .input-rail-scroll::-webkit-scrollbar-track { background: #07111d; border-left: 1px solid #173046; }
+                  .input-rail-scroll::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #22d3ee, #7c3aed); border-radius: 999px; border: 2px solid #07111d; }
                   @keyframes pulse-glow { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); } 50% { box-shadow: 0 0 12px 4px rgba(239,68,68,0.2); } }
                   .emergency-pulse { animation: pulse-glow 1.5s ease-in-out infinite; }
                 `}</style>
+                <div className="mx-auto flex h-full min-h-0 w-full max-w-[340px] flex-col overflow-hidden rounded-[22px] border border-[#173046] bg-[#020813] shadow-[0_18px_50px_rgba(0,0,0,0.34)]">
+                  <div className="shrink-0 border-b border-[#173046] bg-[linear-gradient(180deg,rgba(7,16,28,0.96),rgba(3,8,18,0.96))] px-3 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] font-bold uppercase tracking-[0.28em] text-cyan-300">Input Control Deck</div>
+                        <div className="mt-1 text-[12px] font-semibold text-white">Machine-room tools for sources, layouts, and broadcast control.</div>
+                      </div>
+                      <div className="rounded-full border border-[#26445c] bg-[#08101c] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-300">
+                        {composerMode ? 'Canvas Armed' : 'Standby'}
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-1 gap-2 text-[10px]">
+                      <div className="rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-2">
+                        <div className="uppercase tracking-[0.2em] text-slate-500">Sources</div>
+                        <div className="mt-1 text-white">{cameraSources.length} online</div>
+                      </div>
+                      <div className={`rounded-xl border px-3 py-2 ${aiHealth?.ok ? 'border-emerald-500/25 bg-emerald-500/10' : 'border-amber-500/20 bg-amber-500/10'}`}>
+                        <div className="uppercase tracking-[0.2em] text-slate-500">AI Status</div>
+                        <div className={`mt-1 ${aiHealth?.ok ? 'text-emerald-200' : 'text-amber-200'}`}>{aiHealth?.ok ? 'Local AI ready' : 'Local AI diagnostic'}</div>
+                      </div>
+                    </div>
+                    <div className="mt-2 rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-2 text-[10px] leading-relaxed text-slate-400">
+                      {aiStatusText}
+                    </div>
+                  </div>
+                  <div className="relative flex-1 min-h-0 overflow-hidden">
+                    <div className="input-rail-scroll h-full min-h-0 overflow-y-scroll overscroll-contain px-2 py-2 pb-28 pr-2 space-y-2">
 
                 {/* ─── INPUT MANAGER ─── */}
                 <CollapsibleSection
@@ -3570,17 +4200,20 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   subtitle={`${cameraSources.length} source${cameraSources.length !== 1 ? 's' : ''} active`}
                   open={inputsSection === 'input-manager'}
                   onToggle={(open) => setInputsSection(open ? 'input-manager' : '')}
+                  className="rounded-2xl border border-[#173046] bg-[#05101b]"
+                  summaryClassName="cursor-pointer list-none px-3 py-3 flex items-center justify-between"
+                  bodyClassName="px-3 pb-3 pt-1 space-y-2"
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-xs text-gray-400">Add sources & manage live cuts</div>
-                    <div className="flex gap-1.5">
+                  <div className="mb-2 space-y-2">
+                    <div className="text-xs text-gray-400">Add sources, manage live cuts, and keep controls inside the safe rail.</div>
+                    <div className="flex flex-wrap gap-1.5">
                       <button onClick={() => setShowDeviceSelector(true)} className="section-btn section-btn-ghost flex items-center gap-1"><Camera size={12} /> Local</button>
                       <button onClick={createPhoneSource} disabled={phoneSlotsFull} className="section-btn section-btn-ghost flex items-center gap-1"><Smartphone size={12} /> Phone</button>
                     </div>
                   </div>
-                  <div className="flex gap-2 mb-3">
-                    <button onClick={cutToNext} className="section-btn section-btn-primary flex items-center gap-1 flex-1 justify-center"><ChevronRight size={14} /> Cut To Next</button>
-                    <button onClick={emergencyWide} className="section-btn section-btn-danger flex items-center gap-1 flex-1 justify-center emergency-pulse"><AlertTriangle size={14} /> Emergency Wide</button>
+                  <div className="grid grid-cols-1 gap-2 mb-3">
+                    <button onClick={cutToNext} className="section-btn section-btn-primary flex items-center gap-1 w-full justify-center"><ChevronRight size={14} /> Cut To Next</button>
+                    <button onClick={emergencyWide} className="section-btn section-btn-danger flex items-center gap-1 w-full justify-center emergency-pulse"><AlertTriangle size={14} /> Emergency Wide</button>
                   </div>
 
                   {cameraSources.length === 0 && (
@@ -3588,12 +4221,13 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   )}
 
                   {cameraSources.map((src, idx) => (
-                    <div key={src.id} className="flex items-center gap-2.5 bg-gradient-to-r from-aether-800/60 to-aether-800/30 border border-aether-700/60 rounded-lg p-2 mb-1.5 hover:border-aether-600 transition-colors">
-                      <div className="w-6 h-6 rounded-full bg-aether-700 flex items-center justify-center text-xs font-bold text-aether-300 shrink-0">#{idx + 1}</div>
-                      <SourcePreview stream={src.stream} />
-                      <div className="flex-1 min-w-0">
+                    <div key={src.id} className="bg-gradient-to-r from-aether-800/60 to-aether-800/30 border border-aether-700/60 rounded-lg p-2 mb-1.5 hover:border-aether-600 transition-colors">
+                      <div className="flex items-start gap-2.5">
+                        <div className="w-6 h-6 rounded-full bg-aether-700 flex items-center justify-center text-xs font-bold text-aether-300 shrink-0">#{idx + 1}</div>
+                        <SourcePreview stream={src.stream} />
+                        <div className="flex-1 min-w-0">
                         <input value={src.label} onChange={(e) => updateSourceLabel(src.id, e.target.value)} className="w-full bg-transparent text-sm text-white outline-none border-b border-transparent focus:border-aether-500 truncate" />
-                        <div className="flex items-center gap-1.5 mt-0.5">
+                        <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
                           <span className={`status-badge ${src.status === 'live' ? 'status-live' : src.status === 'pending' ? 'status-pending' : 'status-error'}`}>
                             <span className="w-1.5 h-1.5 rounded-full" style={{ background: src.status === 'live' ? '#4ade80' : src.status === 'pending' ? '#fbbf24' : '#f87171' }} />
                             {src.status}
@@ -3601,24 +4235,325 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                           <span className="text-xs text-gray-400">Press {idx + 1}</span>
                         </div>
                       </div>
-                      <div className="flex flex-col gap-1 shrink-0">
-                        <button onClick={() => makeMain(src.layerId)} className="section-btn section-btn-primary">Main</button>
-                        {src.audioTrackId && <button onClick={() => setSourceAudioActive(src.id)} className="section-btn section-btn-ghost">Audio</button>}
+                      <div className="flex flex-col gap-1 shrink-0 min-w-[78px]">
+                        <button onClick={() => makeMain(src.layerId)} className="section-btn section-btn-primary w-full">Main</button>
+                        {src.audioTrackId && <button onClick={() => setSourceAudioActive(src.id)} className="section-btn section-btn-ghost w-full">Audio</button>}
                         <button onClick={() => removeSource(src.id)} className="section-btn section-btn-danger">✕</button>
                       </div>
+                    </div>
                     </div>
                   ))}
                 </CollapsibleSection>
 
+                <CollapsibleSection
+                  title="🎬 Layout Studio"
+                  subtitle={composerMode ? `Composer Mode · ${activeThemeDef.name}` : 'Composer Mode Off'}
+                  open={inputsSection === 'layout-studio'}
+                  onToggle={(open) => setInputsSection(open ? 'layout-studio' : '')}
+                  className="rounded-2xl border border-[#1a3850] bg-[#05101b]"
+                  summaryClassName="cursor-pointer list-none px-3 py-3 flex items-center justify-between"
+                  bodyClassName="px-3 pb-4 pt-1 space-y-3"
+                >
+                  <div className="mb-3 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold text-white">Composer Mode</div>
+                        <div className="text-[10px] text-gray-400">Broadcast canvas control with cinematic layouts and Lumina-aware intelligence.</div>
+                      </div>
+                      <label className="aether-toggle">
+                        <input type="checkbox" checked={composerMode} onChange={(e) => setComposerMode(e.target.checked)} />
+                        <span className="slider" />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 text-[10px]">
+                      <div className="rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-2">
+                        <div className="uppercase tracking-[0.2em] text-slate-500">Canvas Mode</div>
+                        <div className="mt-1 text-white">{composerMode ? 'Armed for broadcast composition' : 'Standby until enabled'}</div>
+                      </div>
+                      <div className="rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-2">
+                        <div className="uppercase tracking-[0.2em] text-slate-500">Live Theme</div>
+                        <div className="mt-1 text-white">{activeThemeDef.name}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <details className="mb-4 rounded-2xl border border-aether-700/70 bg-aether-950/40 px-3 py-2">
+                    <summary className="cursor-pointer list-none text-[10px] font-bold uppercase tracking-[0.24em] text-gray-400">
+                      Theme Library
+                    </summary>
+                    <div className="mt-3">
+                      <div className="text-[10px] uppercase tracking-[0.24em] text-gray-500 mb-2">Layout Packs</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {LAYOUT_PACKS.map((pack) => (
+                          <button
+                            key={pack.id}
+                            onClick={() => {
+                              setPreviewLayoutPack(pack.id);
+                              if (previewLayoutPack !== pack.id) {
+                                const fallbackTheme = LAYOUT_THEMES.find((theme) => theme.packId === pack.id);
+                                if (fallbackTheme) selectLayoutTheme(fallbackTheme.id);
+                              }
+                            }}
+                            className={`px-2.5 py-1.5 rounded-full text-[10px] border transition-all ${previewLayoutPack === pack.id ? 'border-cyan-400 bg-cyan-400/10 text-cyan-200' : 'border-aether-700 text-gray-400 hover:border-aether-500 hover:text-white'}`}
+                          >
+                            {pack.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="mt-3 text-[10px] uppercase tracking-[0.24em] text-gray-500 mb-2">Layout Themes</div>
+                    <div className="grid grid-cols-1 gap-2.5">
+                      {(visibleLayoutThemes.length ? visibleLayoutThemes : LAYOUT_THEMES).map((theme) => (
+                        <button
+                          key={theme.id}
+                          onClick={() => selectLayoutTheme(theme.id)}
+                          className={`group rounded-2xl border p-2 text-left transition-all ${previewTheme === theme.id ? 'border-cyan-400 bg-cyan-400/10 shadow-[0_0_0_1px_rgba(34,211,238,0.15)]' : 'border-aether-700 bg-aether-900/60 hover:border-aether-500 hover:bg-aether-800/70'}`}
+                        >
+                          <div className="text-xs font-semibold text-white flex items-center justify-between">
+                            <span>{theme.name}</span>
+                            {appliedTheme === theme.id && <span className="text-[9px] uppercase tracking-[0.2em] text-cyan-300">Live</span>}
+                          </div>
+                          <div className="mt-2 h-20 rounded-xl border border-white/10 overflow-hidden relative bg-gradient-to-br from-[#08111f] via-[#111827] to-[#060913]">
+                            {theme.preview.map((tile) => (
+                              <div
+                                key={tile.id}
+                                className={`absolute rounded-[14px] transition-transform duration-200 group-hover:scale-[1.03] ${tile.primary ? 'bg-white/12 border border-white/20 shadow-[0_10px_30px_rgba(0,0,0,0.28)]' : 'bg-cyan-300/10 border border-cyan-200/20'}`}
+                                style={{
+                                  left: `${tile.x * 100}%`,
+                                  top: `${tile.y * 100}%`,
+                                  width: `${tile.width * 100}%`,
+                                  height: `${tile.height * 100}%`,
+                                }}
+                              >
+                                <div className={`absolute inset-x-0 top-0 h-4 ${tile.primary ? 'bg-white/10' : 'bg-cyan-300/12'}`} />
+                              </div>
+                            ))}
+                          </div>
+                          <div className="mt-2 text-[10px] text-gray-400 leading-relaxed">{theme.description}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </details>
+                  <div className="rounded-2xl border border-aether-700 bg-gradient-to-br from-aether-900/85 to-[#050b17] p-3 mb-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-semibold text-white">Preview Layout</div>
+                        <div className="text-[10px] text-gray-400">{getLayoutThemeDefinition(previewTheme).name} · {previewSelection.layoutTemplate.replaceAll('_', ' ')}</div>
+                      </div>
+                      <div className="text-[10px] text-cyan-300 uppercase tracking-[0.22em]">{layoutPreviewState.swappedRoles ? 'Swapped' : 'Standard'}</div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 text-[10px]">
+                      <div className="rounded-xl border border-aether-700 bg-aether-950/60 p-2">
+                        <div className="text-gray-500 uppercase tracking-[0.2em] mb-1">Background</div>
+                        <div className="text-white">{previewBackgroundStyle.replaceAll('_', ' ')}</div>
+                      </div>
+                      <div className="rounded-xl border border-aether-700 bg-aether-950/60 p-2">
+                        <div className="text-gray-500 uppercase tracking-[0.2em] mb-1">Frame</div>
+                        <div className="text-white">{previewFrameStyle}</div>
+                      </div>
+                      <div className="rounded-xl border border-aether-700 bg-aether-950/60 p-2">
+                        <div className="text-gray-500 uppercase tracking-[0.2em] mb-1">Motion</div>
+                        <div className="text-white">{previewMotionStyle}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <details className="mb-4 rounded-2xl border border-aether-700/70 bg-aether-950/40 px-3 py-2">
+                    <summary className="cursor-pointer list-none text-[10px] font-bold uppercase tracking-[0.24em] text-gray-400">
+                      Visual Style
+                    </summary>
+                    <div className="mt-3 space-y-3">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.24em] text-gray-500 mb-2">Background</div>
+                      <div className="grid grid-cols-1 gap-2">
+                        {[
+                          ['blurred_camera', 'Blur Camera'],
+                          ['gradient_motion', 'Gradient Motion'],
+                          ['brand_wave', 'Brand Theme'],
+                          ['light_studio', 'Light Studio'],
+                        ].map(([id, label]) => (
+                          <button
+                            key={id}
+                            onClick={() => setPreviewBackgroundStyle(id as BackgroundStyleId)}
+                            className={`rounded-xl border px-3 py-2 text-xs transition-all ${previewBackgroundStyle === id ? 'border-cyan-400 bg-cyan-400/10 text-white' : 'border-aether-700 text-gray-400 hover:border-aether-500 hover:text-white'}`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.24em] text-gray-500 mb-2">Frame Style</div>
+                      <div className="grid grid-cols-1 gap-2">
+                        {(['floating', 'flat', 'glass'] as FrameStyleId[]).map((id) => (
+                          <button
+                            key={id}
+                            onClick={() => setPreviewFrameStyle(id)}
+                            className={`rounded-xl border px-3 py-2 text-xs capitalize transition-all ${previewFrameStyle === id ? 'border-cyan-400 bg-cyan-400/10 text-white' : 'border-aether-700 text-gray-400 hover:border-aether-500 hover:text-white'}`}
+                          >
+                            {id}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.24em] text-gray-500 mb-2">Motion Style</div>
+                      <div className="grid grid-cols-1 gap-2">
+                        {(['smooth', 'gentle', 'snappy'] as MotionStyleId[]).map((id) => (
+                          <button
+                            key={id}
+                            onClick={() => setPreviewMotionStyle(id)}
+                            className={`rounded-xl border px-3 py-2 text-xs capitalize transition-all ${previewMotionStyle === id ? 'border-cyan-400 bg-cyan-400/10 text-white' : 'border-aether-700 text-gray-400 hover:border-aether-500 hover:text-white'}`}
+                          >
+                            {id}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.24em] text-gray-500 mb-2">Brand Theme</div>
+                      <div className="grid grid-cols-1 gap-2">
+                        {brandColors.map((color, idx) => (
+                          <label key={`${color}-${idx}`} className="rounded-xl border border-aether-700 bg-aether-950/60 px-2 py-2 flex items-center gap-2">
+                            <input
+                              type="color"
+                              value={color}
+                              onChange={(e) => setBrandColors((prev) => prev.map((entry, entryIdx) => entryIdx === idx ? e.target.value : entry))}
+                              className="w-7 h-7 rounded-md bg-transparent"
+                            />
+                            <span className="text-[10px] text-gray-300 font-mono truncate">{color}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    </div>
+                  </details>
+                  <details className="mb-4 rounded-2xl border border-aether-700/70 bg-aether-950/40 px-3 py-2">
+                    <summary className="cursor-pointer list-none text-[10px] font-bold uppercase tracking-[0.24em] text-gray-400">
+                      Automation And Advanced
+                    </summary>
+                    <div className="mt-3 space-y-4">
+                  <div className="rounded-2xl border border-aether-700 bg-aether-900/35 p-3 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-semibold text-white">Advanced Manual Layout</div>
+                        <div className="text-[10px] text-gray-400">Manual template staging without leaving Layout Studio.</div>
+                      </div>
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{previewLayoutTemplate.replaceAll('_', ' ')}</div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {[
+                        { id: 'main_thumbs' as const, label: 'Main+Th', icon: '▣' },
+                        { id: 'side_by_side' as const, label: 'Split', icon: '◫' },
+                        { id: 'pip_corner' as const, label: 'PiP', icon: '△' },
+                        { id: 'grid_2x2' as const, label: 'Grid', icon: '⊞' },
+                        { id: 'speaker_focus' as const, label: 'Speaker', icon: '◉' },
+                        { id: 'scripture_focus' as const, label: 'Scripture', icon: '◧' },
+                        { id: 'sermon_split_left' as const, label: 'Split L', icon: '◭' },
+                        { id: 'sermon_split_right' as const, label: 'Split R', icon: '◮' },
+                      ].map((lt) => (
+                        <button
+                          key={lt.id}
+                          onClick={() => setPreviewLayoutTemplate(lt.id)}
+                          className={`flex flex-col items-center gap-0.5 p-2 rounded-lg border text-xs transition-all ${previewLayoutTemplate === lt.id ? 'border-aether-500 bg-aether-700/40 text-white' : 'border-aether-700 bg-aether-800/30 text-gray-400 hover:border-aether-600'}`}
+                        >
+                          <span className="text-lg">{lt.icon}</span>
+                          <span>{lt.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-3 p-3 rounded-2xl border border-aether-700 bg-aether-900/35 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-semibold text-white">Scene Intelligence</div>
+                        <div className="text-[10px] text-gray-400">Lumina + Director Mode can auto-pivot between speaker, scripture, and broadcast emphasis.</div>
+                      </div>
+                      <label className="aether-toggle">
+                        <input type="checkbox" checked={smartLayoutEnabled} onChange={(e) => setSmartLayoutEnabled(e.target.checked)} />
+                        <span className="slider" />
+                      </label>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-gray-400">Lumina state: <span className="text-cyan-300">{(luminaState.contentMode as LuminaContentMode).replace('_', ' ')}</span></div>
+                      <div className="text-[10px] text-gray-500 truncate">{luminaState.sceneName || luminaState.title || 'No presenter sync yet'}</div>
+                    </div>
+                    <div className="space-y-2">
+                      <div>
+                        <div className="text-xs font-semibold text-white">Intent Director</div>
+                        <div className="text-[10px] text-gray-400">Context-aware layout switching across Lumina, audience, and Aether cues.</div>
+                      </div>
+                      <label className="aether-toggle">
+                        <input type="checkbox" checked={intentDirectorOn} onChange={(e) => setIntentDirectorOn(e.target.checked)} />
+                        <span className="slider" />
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] text-gray-400">Cooldown</span>
+                      <input
+                        type="number"
+                        min={200}
+                        max={5000}
+                        step={100}
+                        value={intentCooldownMs}
+                        onChange={(e) => setIntentCooldownMs(Number(e.target.value) || 1200)}
+                        className="w-20 bg-[#110b20] border border-[#2e2650] rounded-md px-2 py-1 text-[10px] text-white text-center outline-none"
+                      />
+                      <span className="text-[10px] text-gray-400">ms</span>
+                      <div className="ml-auto text-[10px] text-aether-300 truncate max-w-[170px]">{intentDirectorStatus}</div>
+                    </div>
+                  </div>
+                    </div>
+                  </details>
+                  <div className="sticky bottom-0 z-10 -mx-3 mt-4 border-t border-[#173046] bg-[linear-gradient(180deg,rgba(2,8,19,0.18),rgba(2,8,19,0.96))] px-3 pb-1 pt-3 backdrop-blur">
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => runTransition(() => previewSelectedLayoutTheme())}
+                        className="section-btn section-btn-ghost"
+                      >
+                        Preview Layout
+                      </button>
+                      <button
+                        onClick={() => runTransition(() => applySelectedLayoutTheme())}
+                        className="section-btn section-btn-primary"
+                      >
+                        Apply Layout
+                      </button>
+                      <button
+                        onClick={() => {
+                          const nextSwap = !swapPending;
+                          setSwapPending(nextSwap);
+                          if (composerMode) {
+                            runTransition(() => applyComposerLayoutState(composerMainLayerIdRef.current || null, layoutTemplateRef.current, undefined, {
+                              themeId: layoutThemeRef.current,
+                              backgroundStyle: backgroundStyleRef.current,
+                              frameStyle: frameStyleRef.current,
+                              motionStyle: motionStyleRef.current,
+                              swappedRoles: nextSwap,
+                              persistMainLayerId: true,
+                            }));
+                          }
+                        }}
+                        className="section-btn section-btn-ghost"
+                      >
+                        Swap Layout
+                      </button>
+                      <button onClick={saveScenePreset} className="section-btn section-btn-primary">Save Preset</button>
+                    </div>
+                  </div>
+                </CollapsibleSection>
+
                 {/* ─── COMPOSER MODE ─── */}
+                {false && (
                 <CollapsibleSection
                   title="🖼️ Composer Mode"
-                  subtitle={composerMode ? layoutTemplate.replace('_', ' ') : 'Off'}
+                  subtitle={previewLayoutTemplate.replace('_', ' ')}
                   open={inputsSection === 'composer'}
                   onToggle={(open) => setInputsSection(open ? 'composer' : '')}
+                  className="rounded-2xl border border-[#173046] bg-[#05101b]"
+                  summaryClassName="cursor-pointer list-none px-3 py-3 flex items-center justify-between"
+                  bodyClassName="px-3 pb-3 pt-1 space-y-3"
                 >
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs text-gray-300">Staged layout mode</span>
+                    <span className="text-xs text-gray-300">Manual template staging</span>
                     <label className="aether-toggle">
                       <input type="checkbox" checked={composerMode} onChange={(e) => setComposerMode(e.target.checked)} />
                       <span className="slider" />
@@ -3638,16 +4573,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       <button
                         key={lt.id}
                         onClick={() => {
-                          if (composerMode) {
-                            runTransition(() => {
-                              setLayoutTemplate(lt.id);
-                              applyComposerLayoutState(selectedLayerId || null, lt.id);
-                            });
-                          } else {
-                            setLayoutTemplate(lt.id);
-                          }
+                          setPreviewLayoutTemplate(lt.id);
                         }}
-                        className={`flex flex-col items-center gap-0.5 p-2 rounded-lg border text-xs transition-all ${layoutTemplate === lt.id ? 'border-aether-500 bg-aether-700/40 text-white' : 'border-aether-700 bg-aether-800/30 text-gray-400 hover:border-aether-600'
+                        className={`flex flex-col items-center gap-0.5 p-2 rounded-lg border text-xs transition-all ${previewLayoutTemplate === lt.id ? 'border-aether-500 bg-aether-700/40 text-white' : 'border-aether-700 bg-aether-800/30 text-gray-400 hover:border-aether-600'
                           }`}
                       >
                         <span className="text-lg">{lt.icon}</span>
@@ -3656,7 +4584,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                     ))}
                   </div>
                   <button
-                    onClick={() => runTransition(() => applyComposerLayoutState())}
+                    onClick={() => runTransition(() => previewSelectedLayoutTheme())}
                     className="section-btn section-btn-primary w-full"
                   >
                     Apply Layout
@@ -3688,6 +4616,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                     </div>
                   </div>
                 </CollapsibleSection>
+                )}
 
                 {/* ─── AUTO-DIRECTOR ─── */}
                 <CollapsibleSection
@@ -3955,10 +4884,14 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                     );
                   })}
                 </div>
+                    </div>
+                  </div>
               </div>
+            </div>
             )}
           </div>
         </div>
+      </div>
       </div>
 
       {showSettings && (
