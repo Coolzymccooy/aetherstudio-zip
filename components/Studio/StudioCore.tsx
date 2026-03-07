@@ -47,6 +47,8 @@ import {
 } from './studioInteraction';
 import {
   buildCanvasLayoutRevision,
+  computeOperatorRailScrollState,
+  computeInputSectionBodyHeights,
 } from './studioShell';
 import Peer, { DataConnection, MediaConnection } from "peerjs";
 
@@ -234,8 +236,26 @@ const CollapsibleSection: React.FC<{
   className?: string;
   summaryClassName?: string;
   bodyClassName?: string;
+  scrollBodyClassName?: string;
+  bodyStyle?: React.CSSProperties;
+  footer?: React.ReactNode;
+  footerClassName?: string;
   children: React.ReactNode;
-}> = ({ title, subtitle, defaultOpen, open, onToggle, className, summaryClassName, bodyClassName, children }) => (
+}> = ({
+  title,
+  subtitle,
+  defaultOpen,
+  open,
+  onToggle,
+  className,
+  summaryClassName,
+  bodyClassName,
+  scrollBodyClassName,
+  bodyStyle,
+  footer,
+  footerClassName,
+  children
+}) => (
   <details
     open={open ?? defaultOpen}
     onToggle={(e) => {
@@ -243,18 +263,21 @@ const CollapsibleSection: React.FC<{
       const el = e.currentTarget as HTMLDetailsElement;
       onToggle(el.open);
     }}
-    className={className || "bg-aether-800/40 border border-aether-700 rounded-lg"}
+    className={`flex min-h-0 flex-col overflow-hidden ${className || "bg-aether-800/40 border border-aether-700 rounded-lg"}`}
   >
-    <summary className={summaryClassName || "cursor-pointer list-none px-3 py-2 flex items-center justify-between"}>
+    <summary className={summaryClassName || "sticky top-0 z-20 cursor-pointer list-none px-3 py-2 flex items-center justify-between bg-[#05101b]"}>
       <div>
         <div className="text-[13px] font-semibold text-white">{title}</div>
         {subtitle && <div className="text-xs text-gray-300">{subtitle}</div>}
       </div>
       <div className="text-xs text-gray-400">Toggle</div>
     </summary>
-    <div className={bodyClassName || "px-3 pb-3 pt-1 space-y-2"}>
-      {children}
+    <div className={bodyClassName || "min-h-0 overflow-hidden px-3 pb-3 pt-1"}>
+      <div className={scrollBodyClassName || "space-y-2"} style={bodyStyle}>
+        {children}
+      </div>
     </div>
+    {footer ? <div className={footerClassName || "relative z-20 shrink-0 pointer-events-auto"}>{footer}</div> : null}
   </details>
 );
 
@@ -312,6 +335,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     height: typeof window !== 'undefined' ? window.innerHeight : 0,
   }));
   const [operatorRailSize, setOperatorRailSize] = useState({ width: 0, height: 0 });
+  const [inputRailScrollState, setInputRailScrollState] = useState(() => computeOperatorRailScrollState({
+    clientHeight: 0,
+    scrollHeight: 0,
+    scrollTop: 0,
+    trackHeight: 0,
+  }));
   const [showDeviceSelector, setShowDeviceSelector] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
@@ -572,6 +601,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const localChunksRef = useRef<Blob[]>([]);
   const settingsPanelRef = useRef<HTMLDivElement | null>(null);
   const operatorRailRef = useRef<HTMLDivElement | null>(null);
+  const inputRailScrollRef = useRef<HTMLDivElement | null>(null);
+  const layoutThemeLibraryRef = useRef<HTMLDetailsElement | null>(null);
   const settingsDragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
 
   // Audio Refs
@@ -777,6 +808,18 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     setOperatorRailSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
   }, []);
 
+  const syncInputRailScrollState = useCallback(() => {
+    const rail = inputRailScrollRef.current;
+    if (!rail) return;
+    setInputRailScrollState(computeOperatorRailScrollState({
+      clientHeight: rail.clientHeight,
+      scrollHeight: rail.scrollHeight,
+      scrollTop: rail.scrollTop,
+      trackHeight: rail.clientHeight,
+      minThumbHeight: 56,
+    }));
+  }, []);
+
   useEffect(() => {
     syncOperatorRailSize();
     const rail = operatorRailRef.current;
@@ -796,6 +839,26 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     });
     return () => window.cancelAnimationFrame(raf);
   }, [rightPanelTab, inputsSection, composerMode, syncOperatorRailSize]);
+
+  useEffect(() => {
+    if (rightPanelTab !== 'inputs') return;
+    const rail = inputRailScrollRef.current;
+    if (!rail) return;
+    const handleScroll = () => syncInputRailScrollState();
+    handleScroll();
+    rail.addEventListener('scroll', handleScroll, { passive: true });
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => syncInputRailScrollState());
+      resizeObserver.observe(rail);
+    }
+    const raf = window.requestAnimationFrame(() => syncInputRailScrollState());
+    return () => {
+      window.cancelAnimationFrame(raf);
+      rail.removeEventListener('scroll', handleScroll);
+      resizeObserver?.disconnect();
+    };
+  }, [rightPanelTab, inputsSection, composerMode, operatorRailSize.height, syncInputRailScrollState]);
 
   const handleSettingsDrag = useCallback((e: MouseEvent) => {
     const drag = settingsDragRef.current;
@@ -3311,6 +3374,13 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     setPreviewMotionStyle(theme.motionStyle);
   }, []);
 
+  const openLayoutThemeLibrary = useCallback(() => {
+    const themeLibrary = layoutThemeLibraryRef.current;
+    if (!themeLibrary) return;
+    themeLibrary.open = true;
+    themeLibrary.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, []);
+
   const previewSelectedLayoutTheme = useCallback(() => {
     const nextThemeId = previewThemeRef.current;
     const nextMainLayerId = composerMainLayerIdRef.current || selectedLayerId || null;
@@ -3875,6 +3945,23 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     composerMode,
   });
   const aiStatusText = aiHealth ? formatAiHealthMessage(aiHealth) : 'Checking local AI health...';
+  const inputSectionHeights = computeInputSectionBodyHeights({
+    railHeight: operatorRailSize.height,
+  });
+  const inputSectionBaseClassName = "rounded-2xl border border-[#173046] bg-[#05101b]";
+  const inputSectionSummaryClassName = "sticky top-0 z-10 cursor-pointer list-none px-3 py-3 flex items-center justify-between bg-[#05101b]";
+  const inputSectionBodyClassName = "min-h-0 overflow-hidden px-3 pb-3 pt-1";
+  const inputSectionScrollClassName = "input-section-scroll min-h-0 overflow-x-hidden overflow-y-scroll overscroll-contain pr-1";
+  const sectionScrollStyle = {
+    inputManager: { maxHeight: inputSectionHeights.medium },
+    layoutStudio: { maxHeight: inputSectionHeights.layoutStudio },
+    autoDirector: { maxHeight: inputSectionHeights.compact },
+    lowerThirds: { maxHeight: inputSectionHeights.standard },
+    transitions: { maxHeight: inputSectionHeights.compact },
+    scenePresets: { maxHeight: inputSectionHeights.medium },
+    audience: { maxHeight: inputSectionHeights.medium },
+    phoneSlots: { maxHeight: inputSectionHeights.standard },
+  } satisfies Record<string, React.CSSProperties>;
   const manualLayoutOptions = [
     { id: 'main_thumbs' as const, label: 'Main + Thumbs', icon: '▣' },
     { id: 'side_by_side' as const, label: 'Dual Split', icon: '◫' },
@@ -4057,7 +4144,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         </div>
       </header>
 
-      <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:grid md:grid-cols-[56px_minmax(0,1fr)_352px]">
+      <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:grid md:grid-cols-[56px_minmax(0,1fr)_384px]">
         <aside className="w-14 hidden md:flex flex-col items-center py-4 gap-4 border-r border-aether-700 bg-aether-800/50">
           <SourceButton icon={<Camera size={20} />} label="Cam" onClick={() => setShowDeviceSelector(true)} />
           <SourceButton icon={<Smartphone size={20} />} label="Mob" onClick={createPhoneSource} disabled={phoneSlotsFull} />
@@ -4163,10 +4250,16 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   .input-rail-scroll::-webkit-scrollbar { width: 14px; }
                   .input-rail-scroll::-webkit-scrollbar-track { background: #07111d; border-left: 1px solid #173046; }
                   .input-rail-scroll::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #22d3ee, #7c3aed); border-radius: 999px; border: 2px solid #07111d; }
+                  .input-rail-scroll { scrollbar-width: none; }
+                  .input-rail-scroll::-webkit-scrollbar { width: 0; height: 0; }
+                  .input-section-scroll { scrollbar-gutter: stable both-edges; scrollbar-width: thin; scrollbar-color: #22d3ee #050d18; }
+                  .input-section-scroll::-webkit-scrollbar { width: 12px; }
+                  .input-section-scroll::-webkit-scrollbar-track { background: #050d18; border-left: 1px solid rgba(23, 48, 70, 0.7); border-radius: 999px; }
+                  .input-section-scroll::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #22d3ee, #7c3aed); border-radius: 999px; border: 2px solid #050d18; }
                   @keyframes pulse-glow { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); } 50% { box-shadow: 0 0 12px 4px rgba(239,68,68,0.2); } }
                   .emergency-pulse { animation: pulse-glow 1.5s ease-in-out infinite; }
                 `}</style>
-                <div className="mx-auto flex h-full min-h-0 w-full max-w-[340px] flex-col overflow-hidden rounded-[22px] border border-[#173046] bg-[#020813] shadow-[0_18px_50px_rgba(0,0,0,0.34)]">
+                <div className="mx-auto flex h-full min-h-0 w-full max-w-[372px] flex-col overflow-hidden rounded-[22px] border border-[#173046] bg-[#020813] shadow-[0_18px_50px_rgba(0,0,0,0.34)]">
                   <div className="shrink-0 border-b border-[#173046] bg-[linear-gradient(180deg,rgba(7,16,28,0.96),rgba(3,8,18,0.96))] px-3 py-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -4192,7 +4285,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                     </div>
                   </div>
                   <div className="relative flex-1 min-h-0 overflow-hidden">
-                    <div className="input-rail-scroll h-full min-h-0 overflow-y-scroll overscroll-contain px-2 py-2 pb-28 pr-2 space-y-2">
+                    <div
+                      ref={inputRailScrollRef}
+                      className="input-rail-scroll h-full min-h-0 overflow-x-hidden overflow-y-scroll overscroll-contain px-2 py-2 pb-4 pr-4 space-y-2"
+                    >
 
                 {/* ─── INPUT MANAGER ─── */}
                 <CollapsibleSection
@@ -4200,9 +4296,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   subtitle={`${cameraSources.length} source${cameraSources.length !== 1 ? 's' : ''} active`}
                   open={inputsSection === 'input-manager'}
                   onToggle={(open) => setInputsSection(open ? 'input-manager' : '')}
-                  className="rounded-2xl border border-[#173046] bg-[#05101b]"
-                  summaryClassName="cursor-pointer list-none px-3 py-3 flex items-center justify-between"
-                  bodyClassName="px-3 pb-3 pt-1 space-y-2"
+                  className={inputSectionBaseClassName}
+                  summaryClassName={inputSectionSummaryClassName}
+                  bodyClassName={inputSectionBodyClassName}
+                  scrollBodyClassName={`${inputSectionScrollClassName} space-y-2`}
+                  bodyStyle={sectionScrollStyle.inputManager}
                 >
                   <div className="mb-2 space-y-2">
                     <div className="text-xs text-gray-400">Add sources, manage live cuts, and keep controls inside the safe rail.</div>
@@ -4250,9 +4348,50 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   subtitle={composerMode ? `Composer Mode · ${activeThemeDef.name}` : 'Composer Mode Off'}
                   open={inputsSection === 'layout-studio'}
                   onToggle={(open) => setInputsSection(open ? 'layout-studio' : '')}
-                  className="rounded-2xl border border-[#1a3850] bg-[#05101b]"
-                  summaryClassName="cursor-pointer list-none px-3 py-3 flex items-center justify-between"
-                  bodyClassName="px-3 pb-4 pt-1 space-y-3"
+                  className={inputSectionBaseClassName}
+                  summaryClassName={inputSectionSummaryClassName}
+                  bodyClassName={inputSectionBodyClassName}
+                  scrollBodyClassName={`${inputSectionScrollClassName} space-y-3`}
+                  bodyStyle={sectionScrollStyle.layoutStudio}
+                  footerClassName="relative z-20 shrink-0 border-t border-[#173046] pointer-events-auto"
+                  footer={
+                    <div className="bg-[linear-gradient(180deg,rgba(2,8,19,0.18),rgba(2,8,19,0.96))] px-3 pb-3 pt-3 backdrop-blur">
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => runTransition(() => previewSelectedLayoutTheme())}
+                          className="section-btn section-btn-ghost"
+                        >
+                          Preview Layout
+                        </button>
+                        <button
+                          onClick={() => runTransition(() => applySelectedLayoutTheme())}
+                          className="section-btn section-btn-primary"
+                        >
+                          Apply Layout
+                        </button>
+                        <button
+                          onClick={() => {
+                            const nextSwap = !swapPending;
+                            setSwapPending(nextSwap);
+                            if (composerMode) {
+                              runTransition(() => applyComposerLayoutState(composerMainLayerIdRef.current || null, layoutTemplateRef.current, undefined, {
+                                themeId: layoutThemeRef.current,
+                                backgroundStyle: backgroundStyleRef.current,
+                                frameStyle: frameStyleRef.current,
+                                motionStyle: motionStyleRef.current,
+                                swappedRoles: nextSwap,
+                                persistMainLayerId: true,
+                              }));
+                            }
+                          }}
+                          className="section-btn section-btn-ghost"
+                        >
+                          Swap Layout
+                        </button>
+                        <button onClick={saveScenePreset} className="section-btn section-btn-primary">Save Preset</button>
+                      </div>
+                    </div>
+                  }
                 >
                   <div className="mb-3 space-y-3">
                     <div className="flex items-center justify-between gap-3">
@@ -4266,17 +4405,25 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       </label>
                     </div>
                     <div className="grid grid-cols-1 gap-2 text-[10px]">
-                      <div className="rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={() => setComposerMode((prev) => !prev)}
+                        className="rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-2 text-left transition-colors hover:border-cyan-400/70 hover:bg-[#0a1624]"
+                      >
                         <div className="uppercase tracking-[0.2em] text-slate-500">Canvas Mode</div>
                         <div className="mt-1 text-white">{composerMode ? 'Armed for broadcast composition' : 'Standby until enabled'}</div>
-                      </div>
-                      <div className="rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-2">
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openLayoutThemeLibrary}
+                        className="rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-2 text-left transition-colors hover:border-cyan-400/70 hover:bg-[#0a1624]"
+                      >
                         <div className="uppercase tracking-[0.2em] text-slate-500">Live Theme</div>
                         <div className="mt-1 text-white">{activeThemeDef.name}</div>
-                      </div>
+                      </button>
                     </div>
                   </div>
-                  <details className="mb-4 rounded-2xl border border-aether-700/70 bg-aether-950/40 px-3 py-2">
+                  <details ref={layoutThemeLibraryRef} className="mb-4 rounded-2xl border border-aether-700/70 bg-aether-950/40 px-3 py-2">
                     <summary className="cursor-pointer list-none text-[10px] font-bold uppercase tracking-[0.24em] text-gray-400">
                       Theme Library
                     </summary>
@@ -4503,46 +4650,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   </div>
                     </div>
                   </details>
-                  <div className="sticky bottom-0 z-10 -mx-3 mt-4 border-t border-[#173046] bg-[linear-gradient(180deg,rgba(2,8,19,0.18),rgba(2,8,19,0.96))] px-3 pb-1 pt-3 backdrop-blur">
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => runTransition(() => previewSelectedLayoutTheme())}
-                        className="section-btn section-btn-ghost"
-                      >
-                        Preview Layout
-                      </button>
-                      <button
-                        onClick={() => runTransition(() => applySelectedLayoutTheme())}
-                        className="section-btn section-btn-primary"
-                      >
-                        Apply Layout
-                      </button>
-                      <button
-                        onClick={() => {
-                          const nextSwap = !swapPending;
-                          setSwapPending(nextSwap);
-                          if (composerMode) {
-                            runTransition(() => applyComposerLayoutState(composerMainLayerIdRef.current || null, layoutTemplateRef.current, undefined, {
-                              themeId: layoutThemeRef.current,
-                              backgroundStyle: backgroundStyleRef.current,
-                              frameStyle: frameStyleRef.current,
-                              motionStyle: motionStyleRef.current,
-                              swappedRoles: nextSwap,
-                              persistMainLayerId: true,
-                            }));
-                          }
-                        }}
-                        className="section-btn section-btn-ghost"
-                      >
-                        Swap Layout
-                      </button>
-                      <button onClick={saveScenePreset} className="section-btn section-btn-primary">Save Preset</button>
-                    </div>
-                  </div>
                 </CollapsibleSection>
 
                 {/* ─── COMPOSER MODE ─── */}
-                {false && (
+                {/* legacy composer removed
                 <CollapsibleSection
                   title="🖼️ Composer Mode"
                   subtitle={previewLayoutTemplate.replace('_', ' ')}
@@ -4616,7 +4727,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                     </div>
                   </div>
                 </CollapsibleSection>
-                )}
+                */}
 
                 {/* ─── AUTO-DIRECTOR ─── */}
                 <CollapsibleSection
@@ -4624,6 +4735,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   subtitle={autoDirectorOn ? `${autoDirectorMode} · ${autoDirectorCountdown}s` : 'Off'}
                   open={inputsSection === 'auto-director'}
                   onToggle={(open) => setInputsSection(open ? 'auto-director' : '')}
+                  className={inputSectionBaseClassName}
+                  summaryClassName={inputSectionSummaryClassName}
+                  bodyClassName={inputSectionBodyClassName}
+                  scrollBodyClassName={`${inputSectionScrollClassName} space-y-2`}
+                  bodyStyle={sectionScrollStyle.autoDirector}
                 >
                   <div className="flex items-center justify-between mb-3">
                     <span className="text-xs text-gray-300">Auto-switch cameras</span>
@@ -4660,6 +4776,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   subtitle={lowerThirdVisible ? 'Showing' : 'Hidden'}
                   open={inputsSection === 'lower-thirds'}
                   onToggle={(open) => setInputsSection(open ? 'lower-thirds' : '')}
+                  className={inputSectionBaseClassName}
+                  summaryClassName={inputSectionSummaryClassName}
+                  bodyClassName={inputSectionBodyClassName}
+                  scrollBodyClassName={`${inputSectionScrollClassName} space-y-2`}
+                  bodyStyle={sectionScrollStyle.lowerThirds}
                 >
                   <div className="space-y-2 mb-3">
                     <input value={lowerThirdName} onChange={(e) => setLowerThirdName(e.target.value)} className="section-input" placeholder="Speaker Name" />
@@ -4716,6 +4837,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   subtitle={`${transitionMode === 'cut' ? 'Cut' : transitionMode === 'fade' ? 'Fade' : 'Dip White'} · ${transitionMs}ms`}
                   open={inputsSection === 'transitions'}
                   onToggle={(open) => setInputsSection(open ? 'transitions' : '')}
+                  className={inputSectionBaseClassName}
+                  summaryClassName={inputSectionSummaryClassName}
+                  bodyClassName={inputSectionBodyClassName}
+                  scrollBodyClassName={`${inputSectionScrollClassName} space-y-2`}
+                  bodyStyle={sectionScrollStyle.transitions}
                 >
                   <div className="flex items-center gap-2 mb-3">
                     <select value={transitionMode} onChange={(e) => setTransitionMode(e.target.value as any)}
@@ -4745,6 +4871,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   subtitle={`${scenePresets.length} saved`}
                   open={inputsSection === 'scene-presets'}
                   onToggle={(open) => setInputsSection(open ? 'scene-presets' : '')}
+                  className={inputSectionBaseClassName}
+                  summaryClassName={inputSectionSummaryClassName}
+                  bodyClassName={inputSectionBodyClassName}
+                  scrollBodyClassName={`${inputSectionScrollClassName} space-y-2`}
+                  bodyStyle={sectionScrollStyle.scenePresets}
                 >
                   <div className="space-y-2 mb-3">
                     <input value={presetName} onChange={(e) => setPresetName(e.target.value)} className="section-input" placeholder="Preset name" />
@@ -4788,6 +4919,11 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   subtitle={`${audienceMessages.length} messages queued`}
                   open={inputsSection === 'audience'}
                   onToggle={(open) => setInputsSection(open ? 'audience' : '')}
+                  className={inputSectionBaseClassName}
+                  summaryClassName={inputSectionSummaryClassName}
+                  bodyClassName={inputSectionBodyClassName}
+                  scrollBodyClassName={`${inputSectionScrollClassName} space-y-2`}
+                  bodyStyle={sectionScrollStyle.audience}
                 >
                   {/* Pinned message */}
                   <input value={pinnedMessage} onChange={(e) => setPinnedMessage(e.target.value)} className="section-input mb-2" placeholder="Pinned message" />
@@ -4841,11 +4977,21 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                 </CollapsibleSection>
 
                 {/* ─── PHONE SLOTS ─── */}
-                <div className="pt-2">
-                  <h4 className="text-xs font-bold text-gray-300 mb-2 flex items-center gap-2">
-                    📱 Phone Slots
-                    <span className={`status-badge ${phoneSlotsFull ? 'status-error' : 'status-pending'}`}>{phoneSourceCount}/{MAX_PHONE_CAMS}</span>
-                  </h4>
+                <CollapsibleSection
+                  title="Phone Slots"
+                  subtitle={`${phoneSourceCount}/${MAX_PHONE_CAMS} connected`}
+                  open={inputsSection === 'phone-slots'}
+                  onToggle={(open) => setInputsSection(open ? 'phone-slots' : '')}
+                  className={inputSectionBaseClassName}
+                  summaryClassName={inputSectionSummaryClassName}
+                  bodyClassName={inputSectionBodyClassName}
+                  scrollBodyClassName={`${inputSectionScrollClassName} space-y-2`}
+                  bodyStyle={sectionScrollStyle.phoneSlots}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs text-gray-400">Manage linked phone cameras without stretching the rail.</div>
+                    <span className={`status-badge text-[11px] ${phoneSlotsFull ? 'status-error' : 'status-pending'}`}>{phoneSourceCount}/{MAX_PHONE_CAMS}</span>
+                  </div>
                   {phoneSourceCount === 0 && (
                     <div className="text-[10px] text-gray-500 border border-dashed border-aether-700 rounded-lg p-3 text-center">No phone slots. Click <strong>+ Phone</strong> above.</div>
                   )}
@@ -4883,7 +5029,22 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       </div>
                     );
                   })}
-                </div>
+                </CollapsibleSection>
+                    </div>
+                    <div className="pointer-events-none absolute inset-y-3 right-1 flex w-3 justify-center">
+                      <div className="relative h-full w-[6px] rounded-full border border-[#173046] bg-[#07111d]">
+                        {inputRailScrollState.overflow ? (
+                          <div
+                            className="absolute left-0 right-0 rounded-full bg-[linear-gradient(180deg,#22d3ee,#7c3aed)] shadow-[0_0_12px_rgba(34,211,238,0.35)]"
+                            style={{
+                              top: `${inputRailScrollState.thumbTop}px`,
+                              height: `${inputRailScrollState.thumbHeight}px`,
+                            }}
+                          />
+                        ) : (
+                          <div className="absolute left-0 right-0 top-0 h-10 rounded-full bg-[#0d1b2b]" />
+                        )}
+                      </div>
                     </div>
                   </div>
               </div>

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildCanvasLayoutRevision,
+  computeInputSectionBodyHeights,
   computeOperatorRailScrollState,
 } from "./studioShell.ts";
 
@@ -76,4 +77,14 @@ test("canvas layout revision changes on real viewport-affecting changes", () => 
   });
 
   assert.notEqual(before, after);
+});
+
+test("input section body heights stay bounded against rail height", () => {
+  const heights = computeInputSectionBodyHeights({ railHeight: 760 });
+
+  assert.equal(heights.compact >= 112, true);
+  assert.equal(heights.standard > heights.compact, true);
+  assert.equal(heights.medium > heights.standard, true);
+  assert.equal(heights.layoutStudio > heights.medium, true);
+  assert.equal(heights.layoutStudio <= 460, true);
 });

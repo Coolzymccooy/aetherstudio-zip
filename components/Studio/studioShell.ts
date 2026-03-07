@@ -48,6 +48,27 @@ export function computeOperatorRailScrollState(input: {
   };
 }
 
+export type InputSectionBodyHeights = {
+  compact: number;
+  standard: number;
+  medium: number;
+  layoutStudio: number;
+};
+
+export function computeInputSectionBodyHeights(input: {
+  railHeight: number;
+}): InputSectionBodyHeights {
+  const railHeight = Math.max(0, Math.round(input.railHeight || 0));
+  const usableHeight = Math.max(320, railHeight - 280);
+
+  return {
+    compact: Math.max(112, Math.min(Math.round(usableHeight * 0.32), 180)),
+    standard: Math.max(148, Math.min(Math.round(usableHeight * 0.42), 248)),
+    medium: Math.max(184, Math.min(Math.round(usableHeight * 0.56), 320)),
+    layoutStudio: Math.max(240, Math.min(Math.round(usableHeight * 0.8), 460)),
+  };
+}
+
 export function buildCanvasLayoutRevision(input: {
   rightPanelTab: string;
   railWidth: number;
