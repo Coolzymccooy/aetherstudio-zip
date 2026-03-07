@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, shell, ipcMain, desktopCapturer } = require("electron");
 const { spawn } = require("child_process");
 const { autoUpdater } = require("electron-updater");
 const fs = require("fs");
@@ -327,9 +327,32 @@ function createWindow(appUrl) {
     return { action: "deny" };
   });
 
+  // Grant media (camera/mic) permission requests from the renderer so that
+  // getUserMedia with chromeMediaSource:'desktop' constraints works without
+  // requiring a separate setDisplayMediaRequestHandler.
+  win.webContents.session.setPermissionRequestHandler(
+    (_webContents, permission, callback) => {
+      callback(permission === "media");
+    }
+  );
+
   win.loadURL(appUrl);
   return win;
 }
+
+// IPC: return desktop capture sources (screens + windows) with thumbnails so
+// the renderer can display a custom picker instead of auto-grabbing a source.
+ipcMain.handle("aether:get-desktop-sources", async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ["screen", "window"],
+    thumbnailSize: { width: 320, height: 180 },
+  });
+  return sources.map((s) => ({
+    id: s.id,
+    name: s.name,
+    thumbnail: s.thumbnail.toDataURL(),
+  }));
+});
 
 function setupAutoUpdates(win) {
   if (!AUTO_UPDATE_ENABLED || !app.isPackaged || IS_PORTABLE_BUILD) return;

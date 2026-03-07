@@ -112,6 +112,32 @@ const drawContainedMediaWithBackdrop = (
   drawContainMedia(ctx, source, rect);
 };
 
+// Draws a source with per-side crop insets (0–50, percent of natural dimension).
+// When all insets are 0 (default) falls back to standard cover drawing.
+const drawCroppedSource = (
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  rect: Rect,
+  cropLeft = 0,
+  cropRight = 0,
+  cropTop = 0,
+  cropBottom = 0
+) => {
+  const nw = (source as HTMLVideoElement).videoWidth || (source as HTMLImageElement).naturalWidth || rect.width;
+  const nh = (source as HTMLVideoElement).videoHeight || (source as HTMLImageElement).naturalHeight || rect.height;
+  if (!nw || !nh) return;
+  const cl = Math.max(0, Math.min(49, cropLeft)) / 100;
+  const cr = Math.max(0, Math.min(49, cropRight)) / 100;
+  const ct = Math.max(0, Math.min(49, cropTop)) / 100;
+  const cb = Math.max(0, Math.min(49, cropBottom)) / 100;
+  const sx = cl * nw;
+  const sy = ct * nh;
+  const sw = nw * (1 - cl - cr);
+  const sh = nh * (1 - ct - cb);
+  if (sw <= 0 || sh <= 0) return;
+  ctx.drawImage(source, sx, sy, sw, sh, rect.x, rect.y, rect.width, rect.height);
+};
+
 const easeFactorForMotion = (motionStyle?: ComposerLayoutRenderMeta['motionStyle']) => {
   if (motionStyle === 'snappy') return 0.32;
   if (motionStyle === 'gentle') return 0.14;
@@ -758,6 +784,8 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
       if (style.filter) ctx.filter = style.filter;
 
+      const hasCrop = (style.cropLeft || 0) + (style.cropRight || 0) + (style.cropTop || 0) + (style.cropBottom || 0) > 0;
+
       if (layer.type === SourceType.IMAGE && typeof layer.src === 'string') {
         let img = imageElementsRef.current.get(layer.id);
         if (!img || img.src !== layer.src) {
@@ -766,7 +794,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
           imageElementsRef.current.set(layer.id, img);
         }
         if (img.complete && img.naturalWidth > 0) {
-          if ((style.aspectMode || currentMeta.defaultMediaFitMode) === 'contain') {
+          if (hasCrop) {
+            drawCroppedSource(ctx, img, contentRect, style.cropLeft, style.cropRight, style.cropTop, style.cropBottom);
+          } else if ((style.aspectMode || currentMeta.defaultMediaFitMode) === 'contain') {
             drawContainedMediaWithBackdrop(ctx, img, contentRect);
           } else {
             drawCoverMedia(ctx, img, contentRect);
@@ -783,16 +813,22 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
               osCtx.drawImage(mask, 0, 0, osc.width, osc.height);
               osCtx.globalCompositeOperation = 'source-in';
               osCtx.drawImage(videoElement, 0, 0, osc.width, osc.height);
-              if ((style.aspectMode || currentMeta.defaultMediaFitMode) === 'contain') {
+              if (hasCrop) {
+                drawCroppedSource(ctx, osc, contentRect, style.cropLeft, style.cropRight, style.cropTop, style.cropBottom);
+              } else if ((style.aspectMode || currentMeta.defaultMediaFitMode) === 'contain') {
                 drawContainedMediaWithBackdrop(ctx, osc, contentRect);
               } else {
                 drawCoverMedia(ctx, osc, contentRect);
               }
+            } else if (hasCrop) {
+              drawCroppedSource(ctx, videoElement, contentRect, style.cropLeft, style.cropRight, style.cropTop, style.cropBottom);
             } else if ((style.aspectMode || currentMeta.defaultMediaFitMode) === 'contain') {
               drawContainedMediaWithBackdrop(ctx, videoElement, contentRect);
             } else {
               drawCoverMedia(ctx, videoElement, contentRect);
             }
+          } else if (hasCrop) {
+            drawCroppedSource(ctx, videoElement, contentRect, style.cropLeft, style.cropRight, style.cropTop, style.cropBottom);
           } else if ((style.aspectMode || currentMeta.defaultMediaFitMode) === 'contain') {
             drawContainedMediaWithBackdrop(ctx, videoElement, contentRect);
           } else {

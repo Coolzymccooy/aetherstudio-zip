@@ -1,6 +1,6 @@
 import React from 'react';
 import { Layer, SourceType } from '../../types';
-import { Sliders, Trash2, Circle, Square, Type, Play, Bold, Maximize, Move, RotateCcw, Sparkles } from 'lucide-react';
+import { Sliders, Trash2, Circle, Square, Type, Play, Bold, Maximize, Move, RotateCcw, Sparkles, AlertTriangle, Crop } from 'lucide-react';
 
 interface LayerPropertiesProps {
   layer: Layer | null;
@@ -56,41 +56,106 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
 
   return (
     <div className="mx-auto w-full max-w-[356px] min-w-0 bg-aether-900 flex flex-col h-full overflow-hidden">
-      <div className="p-4 border-b border-aether-700 bg-aether-800/50">
-        <h3 className="font-semibold text-white flex items-center justify-between">
+      <div className="px-3 py-2 border-b border-aether-700 bg-aether-800/50 shrink-0">
+        <h3 className="text-sm font-semibold text-white flex items-center justify-between gap-2">
           <span className="truncate">{layer.label}</span>
-          <span className="text-xs px-2 py-0.5 rounded bg-aether-700 text-aether-300 font-mono">{layer.type}</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-aether-700 text-aether-300 font-mono shrink-0">{layer.type}</span>
         </h3>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-8">
+      <div className="prop-scroll-area flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-5" style={{ scrollbarWidth: 'thin', scrollbarColor: '#22d3ee #050d18' }}>
         
-        {/* --- Layout Controls (New) --- */}
-        <div className="space-y-3">
-            <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Layout</label>
-            <div className="flex gap-2">
-                <button 
+        {/* --- Layout Controls --- */}
+        <div className="space-y-2">
+            <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Layout</label>
+            <div className="flex gap-1.5">
+                <button
                   onClick={fitToScreen}
-                  className="flex-1 bg-aether-800 hover:bg-aether-700 text-gray-300 p-2 rounded text-xs flex flex-col items-center gap-1 border border-aether-700 transition-colors"
+                  className="flex-1 bg-aether-800 hover:bg-aether-700 text-gray-300 py-1.5 px-1 rounded text-[10px] flex items-center justify-center gap-1 border border-aether-700 transition-colors"
                   title="Fit to Screen"
                 >
-                    <Maximize size={16} /> Fill
+                    <Maximize size={12} /> Fill
                 </button>
-                <button 
+                <button
                   onClick={centerLayer}
-                  className="flex-1 bg-aether-800 hover:bg-aether-700 text-gray-300 p-2 rounded text-xs flex flex-col items-center gap-1 border border-aether-700 transition-colors"
+                  className="flex-1 bg-aether-800 hover:bg-aether-700 text-gray-300 py-1.5 px-1 rounded text-[10px] flex items-center justify-center gap-1 border border-aether-700 transition-colors"
                   title="Center Layer"
                 >
-                    <Move size={16} /> Center
+                    <Move size={12} /> Center
                 </button>
-                <button 
+                <button
                   onClick={() => onUpdate(layer.id, { x: 0, y: 0, style: { ...layer.style, scale: 1 } })}
-                  className="flex-1 bg-aether-800 hover:bg-aether-700 text-gray-300 p-2 rounded text-xs flex flex-col items-center gap-1 border border-aether-700 transition-colors"
+                  className="flex-1 bg-aether-800 hover:bg-aether-700 text-gray-300 py-1.5 px-1 rounded text-[10px] flex items-center justify-center gap-1 border border-aether-700 transition-colors"
                   title="Reset Position"
                 >
-                    <RotateCcw size={16} /> Reset
+                    <RotateCcw size={12} /> Reset
                 </button>
             </div>
+
+            {/* ── Content Fill Mode (non-text only) ── */}
+            {layer.type !== SourceType.TEXT && (() => {
+              const mode = layer.style.aspectMode ?? 'contain';
+              const slotRatio = layer.width / Math.max(1, layer.height);
+              // Flag likely bars: contain mode + slot is notably landscape (camera/screen content is often 16:9 or portrait,
+              // and gets letterboxed when placed in a differently-shaped grid cell).
+              // Also flag for image layers where contain mode always shows the full image with potential bars.
+              const likelyHasBars = mode === 'contain' && (
+                layer.type === SourceType.CAMERA ||
+                layer.type === SourceType.SCREEN ||
+                (layer.type === SourceType.IMAGE && slotRatio > 1.2)
+              );
+              return (
+                <div className="space-y-2 pt-2 border-t border-aether-800">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Crop size={11} /> Content Fit
+                    </span>
+                    {likelyHasBars && (
+                      <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-400 bg-amber-900/30 border border-amber-500/30 rounded px-2 py-0.5">
+                        <AlertTriangle size={10} /> Empty bars detected
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Fit / Fill pill toggle */}
+                  <div className="flex rounded-lg overflow-hidden border border-aether-700 text-[11px] font-semibold">
+                    <button
+                      onClick={() => updateStyle('aspectMode', 'contain')}
+                      className={`flex-1 py-1.5 flex items-center justify-center gap-1 transition-colors ${
+                        mode === 'contain'
+                          ? 'bg-aether-500 text-white'
+                          : 'bg-aether-800 text-gray-400 hover:text-gray-200'
+                      }`}
+                      title="Show full content — empty areas filled with blurred backdrop"
+                    >
+                      Fit <span className="text-[9px] opacity-60 font-normal hidden sm:inline">full</span>
+                    </button>
+                    <button
+                      onClick={() => updateStyle('aspectMode', 'cover')}
+                      className={`flex-1 py-1.5 flex items-center justify-center gap-1 border-l border-aether-700 transition-colors ${
+                        mode === 'cover'
+                          ? 'bg-cyan-700 text-white'
+                          : 'bg-aether-800 text-gray-400 hover:text-gray-200'
+                      }`}
+                      title="Fill grid slot completely — overflow is cropped"
+                    >
+                      Fill <span className="text-[9px] opacity-60 font-normal hidden sm:inline">no bars</span>
+                    </button>
+                  </div>
+
+                  {mode === 'cover' && (
+                    <p className="text-[10px] text-cyan-400/70 leading-snug">
+                      Slot filled — use <strong>Crop</strong> sliders below to pan the visible area.
+                    </p>
+                  )}
+                  {mode === 'contain' && likelyHasBars && (
+                    <p className="text-[10px] text-amber-300/70 leading-snug">
+                      Switch to <strong>Fill</strong> to remove empty bar areas.
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
         </div>
 
         {/* --- Text Specific Typography Controls --- */}
@@ -190,8 +255,8 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
         )}
 
         {/* --- Generic Transform --- */}
-        <div className="space-y-3">
-           <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Transform</label>
+        <div className="space-y-2">
+           <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Transform</label>
            <div className="space-y-1">
               <div className="flex justify-between text-xs text-gray-400">
                 <span>Scale</span>
@@ -211,8 +276,8 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
 
         {/* --- Shapes (Non-Text) --- */}
         {layer.type !== SourceType.TEXT && (
-        <div className="space-y-3">
-          <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Shape & Crop</label>
+        <div className="space-y-2">
+          <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Shape & Crop</label>
           <div className="grid grid-cols-2 gap-2">
             <button 
               onClick={() => updateStyle('circular', false)}
@@ -244,13 +309,101 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
               />
             </div>
           )}
+
+          {/* ── Crop Insets ── */}
+          <div className="space-y-3 pt-2 border-t border-aether-800">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Crop</span>
+              {((layer.style.cropLeft || 0) + (layer.style.cropRight || 0) + (layer.style.cropTop || 0) + (layer.style.cropBottom || 0)) > 0 && (
+                <button
+                  onClick={() => {
+                    updateStyle('cropLeft', 0);
+                    updateStyle('cropRight', 0);
+                    updateStyle('cropTop', 0);
+                    updateStyle('cropBottom', 0);
+                  }}
+                  className="text-[10px] text-aether-400 hover:text-white px-2 py-0.5 rounded bg-aether-800 border border-aether-700"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+
+            {/* Horizontal crop */}
+            <div className="space-y-2">
+              <div className="text-xs text-gray-500">Horizontal (Left / Right)</div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-gray-500 w-6 text-right">{layer.style.cropLeft || 0}%</span>
+                <div className="flex-1 relative h-5 flex items-center">
+                  {/* Visual crop bar */}
+                  <div className="absolute inset-x-0 h-2 bg-aether-800 rounded-full" />
+                  <div
+                    className="absolute h-2 bg-aether-500/40 rounded-full"
+                    style={{
+                      left: `${layer.style.cropLeft || 0}%`,
+                      right: `${layer.style.cropRight || 0}%`,
+                    }}
+                  />
+                  <input
+                    type="range" min="0" max="49" step="1"
+                    value={layer.style.cropLeft || 0}
+                    onChange={(e) => updateStyle('cropLeft', parseInt(e.target.value))}
+                    className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                    title="Crop from Left"
+                  />
+                </div>
+                <span className="text-[10px] text-gray-500 w-6">{layer.style.cropRight || 0}%</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <div className="text-[10px] text-gray-500">Left {layer.style.cropLeft || 0}%</div>
+                  <input type="range" min="0" max="49" step="1"
+                    value={layer.style.cropLeft || 0}
+                    onChange={(e) => updateStyle('cropLeft', parseInt(e.target.value))}
+                    className="w-full h-1.5 bg-aether-800 rounded-lg appearance-none cursor-pointer accent-aether-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-[10px] text-gray-500">Right {layer.style.cropRight || 0}%</div>
+                  <input type="range" min="0" max="49" step="1"
+                    value={layer.style.cropRight || 0}
+                    onChange={(e) => updateStyle('cropRight', parseInt(e.target.value))}
+                    className="w-full h-1.5 bg-aether-800 rounded-lg appearance-none cursor-pointer accent-aether-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Vertical crop */}
+            <div className="space-y-2">
+              <div className="text-xs text-gray-500">Vertical (Top / Bottom)</div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <div className="text-[10px] text-gray-500">Top {layer.style.cropTop || 0}%</div>
+                  <input type="range" min="0" max="49" step="1"
+                    value={layer.style.cropTop || 0}
+                    onChange={(e) => updateStyle('cropTop', parseInt(e.target.value))}
+                    className="w-full h-1.5 bg-aether-800 rounded-lg appearance-none cursor-pointer accent-aether-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-[10px] text-gray-500">Bottom {layer.style.cropBottom || 0}%</div>
+                  <input type="range" min="0" max="49" step="1"
+                    value={layer.style.cropBottom || 0}
+                    onChange={(e) => updateStyle('cropBottom', parseInt(e.target.value))}
+                    className="w-full h-1.5 bg-aether-800 rounded-lg appearance-none cursor-pointer accent-aether-500"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
         )}
 
         {/* --- Filters (Camo Style) --- */}
         {(layer.type === SourceType.CAMERA || layer.type === SourceType.IMAGE) && (
-          <div className="space-y-3">
-            <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Filters</label>
+          <div className="space-y-2">
+            <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Filters</label>
             <div className="grid grid-cols-3 gap-2">
               {[
                 { label: 'None', val: '' },
@@ -296,14 +449,16 @@ export const LayerProperties: React.FC<LayerPropertiesProps> = ({ layer, onUpdat
           </div>
         )}
 
-        <div className="pt-6 border-t border-aether-800">
-          <button
-            onClick={() => onDelete(layer.id)}
-            className="w-full flex items-center justify-center gap-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 py-2 rounded-lg text-sm transition-colors border border-red-500/20"
-          >
-            <Trash2 size={16} /> Remove Source
-          </button>
-        </div>
+      </div>
+
+      {/* Sticky footer — always visible regardless of scroll position */}
+      <div className="shrink-0 px-3 py-2 border-t border-aether-800 bg-aether-900">
+        <button
+          onClick={() => onDelete(layer.id)}
+          className="w-full flex items-center justify-center gap-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 py-1.5 rounded-lg text-xs font-semibold transition-colors border border-red-500/20"
+        >
+          <Trash2 size={13} /> Remove Source
+        </button>
       </div>
     </div>
   );

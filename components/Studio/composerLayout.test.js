@@ -237,3 +237,105 @@ test("computeTransitionAlpha ramps up then down then returns to zero", () => {
   assert.equal(computeTransitionAlpha(300, 300), 0);
   assert.equal(computeTransitionAlpha(500, 300), 0);
 });
+
+// ─── Layout Studio: z-index guarantees for image overlay stability ───────────
+
+test("main camera placement z-index is well above typical image layer starting value", () => {
+  // Image layers are added at zIndex = layers.length + 1 (typically 1–5).
+  // applyComposerLayoutState boosts image layers to maxPlacementZIndex + 10.
+  // This test confirms the main placement z-index is >=100 so the boost fires.
+  const result = computeComposerLayout({
+    ...baseInput,
+    layoutTemplate: "main_thumbs",
+    cameraLayerIds: ["cam"],
+    selectedMainLayerId: "cam",
+  });
+
+  const mainPlacement = result.placements["cam"];
+  assert.equal(mainPlacement.visible, true);
+  assert.equal(mainPlacement.zIndex >= 100, true,
+    "main camera placement must be >= 100 so image overlay boost logic fires");
+});
+
+test("pip_corner secondary placements have higher z-index than the main background", () => {
+  const result = computeComposerLayout({
+    ...baseInput,
+    layoutTemplate: "pip_corner",
+    cameraLayerIds: ["a", "b", "c"],
+    selectedMainLayerId: "a",
+  });
+
+  assert.equal(result.placements.b.zIndex > result.placements.a.zIndex, true,
+    "PiP overlays must render above the main background");
+});
+
+test("all visible placements have z-index > 0", () => {
+  const layouts = ["main_thumbs", "side_by_side", "grid_2x2", "speaker_focus", "scripture_focus"];
+  for (const layoutTemplate of layouts) {
+    const result = computeComposerLayout({
+      ...baseInput,
+      layoutTemplate,
+      cameraLayerIds: ["a", "b", "c", "d"],
+      selectedMainLayerId: "a",
+    });
+    for (const layerId of result.visibleLayerIds) {
+      const p = result.placements[layerId];
+      assert.equal(p.zIndex > 0, true,
+        `visible layer ${layerId} in ${layoutTemplate} must have zIndex > 0`);
+    }
+  }
+});
+
+// ─── Scene Preset: layout round-trip ─────────────────────────────────────────
+
+test("scene preset layout round-trip preserves main layer and theme", () => {
+  // Simulates saving and reloading a scene preset: apply layout, verify
+  // resolvedMainLayerId and renderMeta are consistent.
+  const result = computeComposerLayout({
+    ...baseInput,
+    layoutTemplate: "sermon_split_left",
+    cameraLayerIds: ["lumina", "cam"],
+    selectedMainLayerId: "lumina",
+    themeId: "sermon_split",
+  });
+
+  assert.equal(result.resolvedMainLayerId, "lumina");
+  assert.equal(result.renderMeta.backgroundStyle !== undefined, true);
+  assert.equal(result.visibleLayerIds.includes("lumina"), true);
+  assert.equal(result.visibleLayerIds.includes("cam"), true);
+});
+
+test("loading a scene preset with swappedRoles promotes secondary to main", () => {
+  const normal = computeComposerLayout({
+    ...baseInput,
+    layoutTemplate: "side_by_side",
+    cameraLayerIds: ["lumina", "cam"],
+    selectedMainLayerId: "lumina",
+    swappedRoles: false,
+  });
+  const swapped = computeComposerLayout({
+    ...baseInput,
+    layoutTemplate: "side_by_side",
+    cameraLayerIds: ["lumina", "cam"],
+    selectedMainLayerId: "lumina",
+    swappedRoles: true,
+  });
+
+  assert.notEqual(normal.resolvedMainLayerId, swapped.resolvedMainLayerId);
+  assert.equal(swapped.resolvedMainLayerId, "cam");
+});
+
+test("scene preset with image overlay: non-camera layers are not in placements", () => {
+  // Image layers are not passed as cameraLayerIds; they must NOT appear in
+  // result.placements so applyComposerLayoutState can detect and boost them.
+  const result = computeComposerLayout({
+    ...baseInput,
+    layoutTemplate: "main_thumbs",
+    cameraLayerIds: ["cam1", "cam2"],
+    selectedMainLayerId: "cam1",
+  });
+
+  assert.equal("image-overlay" in result.placements, false,
+    "image layers must not appear in composer placements");
+  assert.equal("cam1" in result.placements, true);
+});

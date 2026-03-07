@@ -40,6 +40,11 @@ export interface LayerStyle {
   cardBackground?: string;
   aspectMode?: 'cover' | 'contain';
   focusRole?: 'primary' | 'secondary' | 'support';
+  // Crop insets (0–50 percent of the source dimension per side)
+  cropLeft?: number;
+  cropRight?: number;
+  cropTop?: number;
+  cropBottom?: number;
 }
 
 export interface Layer {

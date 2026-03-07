@@ -46,9 +46,13 @@ import {
   resolveProgramLayerId,
 } from './studioInteraction';
 import {
+  buildGlobalScrollSegments,
   buildCanvasLayoutRevision,
+  mapGlobalNodeScrollTopToProgress,
+  mapGlobalProgressToNodeScrollTop,
   computeOperatorRailScrollState,
   computeInputSectionBodyHeights,
+  type GlobalScrollSegments,
 } from './studioShell';
 import Peer, { DataConnection, MediaConnection } from "peerjs";
 
@@ -67,6 +71,12 @@ const MAX_COMPOSED_CAMERAS = (() => {
   if (!Number.isFinite(raw) || raw < 1) return 4;
   return Math.floor(raw);
 })();
+
+const DEFAULT_OPERATOR_RAIL_WIDTH = 384;
+const MIN_OPERATOR_RAIL_WIDTH = 360;
+const MAX_OPERATOR_RAIL_WIDTH = 560;
+const INPUT_RAIL_DISABLED_THUMB_HEIGHT = 56;
+const INPUT_RAIL_OUTER_SCROLL_ID = '__outer_rail__';
 
 type ScenePreset = {
   id: string;
@@ -261,6 +271,13 @@ const CollapsibleSection: React.FC<{
     onToggle={(e) => {
       if (!onToggle) return;
       const el = e.currentTarget as HTMLDetailsElement;
+      // Skip programmatic toggles caused by React reconciling the controlled `open`
+      // prop. When React sets el.open = false (closing another section), the browser
+      // fires a toggle event. At that point the prop value already matches the new
+      // DOM state — the user didn't interact. A genuine user click always has
+      // el.open !== the current prop because the prop hasn't updated yet.
+      const expectedOpen = open ?? defaultOpen ?? false;
+      if (el.open === expectedOpen) return;
       onToggle(el.open);
     }}
     className={`flex min-h-0 flex-col overflow-hidden ${className || "bg-aether-800/40 border border-aether-700 rounded-lg"}`}
@@ -334,6 +351,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     width: typeof window !== 'undefined' ? window.innerWidth : 0,
     height: typeof window !== 'undefined' ? window.innerHeight : 0,
   }));
+  const [operatorRailWidth, setOperatorRailWidth] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_OPERATOR_RAIL_WIDTH;
+    const raw = Number(localStorage.getItem('aether_operator_rail_width') || DEFAULT_OPERATOR_RAIL_WIDTH);
+    if (!Number.isFinite(raw)) return DEFAULT_OPERATOR_RAIL_WIDTH;
+    return Math.max(MIN_OPERATOR_RAIL_WIDTH, Math.min(MAX_OPERATOR_RAIL_WIDTH, Math.round(raw)));
+  });
   const [operatorRailSize, setOperatorRailSize] = useState({ width: 0, height: 0 });
   const [inputRailScrollState, setInputRailScrollState] = useState(() => computeOperatorRailScrollState({
     clientHeight: 0,
@@ -341,7 +364,9 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     scrollTop: 0,
     trackHeight: 0,
   }));
+
   const [showDeviceSelector, setShowDeviceSelector] = useState(false);
+  const [desktopSources, setDesktopSources] = useState<Array<{ id: string; name: string; thumbnail: string }> | null>(null);
   const [showQRModal, setShowQRModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [cloudError, setCloudError] = useState<string | null>(null);
@@ -602,7 +627,12 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const settingsPanelRef = useRef<HTMLDivElement | null>(null);
   const operatorRailRef = useRef<HTMLDivElement | null>(null);
   const inputRailScrollRef = useRef<HTMLDivElement | null>(null);
+  const inputRailTrackRef = useRef<HTMLDivElement | null>(null);
   const layoutThemeLibraryRef = useRef<HTMLDetailsElement | null>(null);
+  const inputRailScrollStateRef = useRef(inputRailScrollState);
+  const inputRailThumbDragRef = useRef<{ trackTop: number; thumbHeight: number; dragOffset: number } | null>(null);
+  const inputRailProgrammaticScrollRef = useRef(false);
+  const operatorRailResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const settingsDragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
 
   // Audio Refs
@@ -800,6 +830,14 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     return () => window.removeEventListener('resize', handleWindowResize);
   }, []);
 
+  useEffect(() => {
+    localStorage.setItem('aether_operator_rail_width', String(operatorRailWidth));
+  }, [operatorRailWidth]);
+
+  useEffect(() => {
+    inputRailScrollStateRef.current = inputRailScrollState;
+  }, [inputRailScrollState]);
+
   const syncOperatorRailSize = useCallback(() => {
     const rail = operatorRailRef.current;
     if (!rail) return;
@@ -808,17 +846,90 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     setOperatorRailSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
   }, []);
 
-  const syncInputRailScrollState = useCallback(() => {
-    const rail = inputRailScrollRef.current;
-    if (!rail) return;
-    setInputRailScrollState(computeOperatorRailScrollState({
-      clientHeight: rail.clientHeight,
-      scrollHeight: rail.scrollHeight,
-      scrollTop: rail.scrollTop,
-      trackHeight: rail.clientHeight,
-      minThumbHeight: 56,
+  const collectInputRailGlobalContext = useCallback(() => {
+    const outerRail = inputRailScrollRef.current;
+    const emptySegments: GlobalScrollSegments = { segments: [], totalScrollable: 0 };
+    if (!outerRail) {
+      return {
+        nodes: [] as Array<{ id: string; element: HTMLElement }>,
+        snapshots: [] as Array<{ id: string; maxScrollTop: number; scrollTop: number }>,
+        segments: emptySegments,
+        outerClientHeight: 0,
+      };
+    }
+
+    // The outer slider scrolls the outer rail container, bringing sections
+    // into view. Each section has its own inner scroll for its content.
+    const nodes: Array<{ id: string; element: HTMLElement }> = [
+      { id: INPUT_RAIL_OUTER_SCROLL_ID, element: outerRail },
+    ];
+
+    const snapshots = nodes.map((node) => ({
+      id: node.id,
+      maxScrollTop: Math.max(0, node.element.scrollHeight - node.element.clientHeight),
+      scrollTop: Math.max(0, node.element.scrollTop || 0),
     }));
+    const segments = buildGlobalScrollSegments({ nodes: snapshots });
+
+    return {
+      nodes,
+      snapshots,
+      segments,
+      outerClientHeight: outerRail.clientHeight || 0,
+    };
   }, []);
+
+  const syncInputRailScrollState = useCallback(() => {
+    const trackHeight = inputRailTrackRef.current?.clientHeight || inputRailScrollRef.current?.clientHeight || 0;
+    const {
+      snapshots,
+      segments,
+      outerClientHeight,
+    } = collectInputRailGlobalContext();
+
+    const globalProgress = mapGlobalNodeScrollTopToProgress({
+      nodes: snapshots,
+      segments,
+    });
+    const maxScrollTop = Math.max(0, segments.totalScrollable);
+    const nextState = computeOperatorRailScrollState({
+      clientHeight: outerClientHeight,
+      scrollHeight: outerClientHeight + maxScrollTop,
+      scrollTop: globalProgress * maxScrollTop,
+      trackHeight,
+      minThumbHeight: 56,
+    });
+    setInputRailScrollState(nextState);
+  }, [collectInputRailGlobalContext]);
+
+  const applyInputRailGlobalProgress = useCallback((progress: number) => {
+    const {
+      nodes,
+      snapshots,
+      segments,
+    } = collectInputRailGlobalContext();
+    if (segments.totalScrollable <= 0) {
+      syncInputRailScrollState();
+      return;
+    }
+
+    const nextById = mapGlobalProgressToNodeScrollTop({
+      nodes: snapshots,
+      segments,
+      progress,
+    });
+    inputRailProgrammaticScrollRef.current = true;
+    nodes.forEach((node) => {
+      const nextTop = Math.max(0, nextById[node.id] || 0);
+      if (Math.abs(node.element.scrollTop - nextTop) > 0.5) {
+        node.element.scrollTop = nextTop;
+      }
+    });
+    window.requestAnimationFrame(() => {
+      inputRailProgrammaticScrollRef.current = false;
+      syncInputRailScrollState();
+    });
+  }, [collectInputRailGlobalContext, syncInputRailScrollState]);
 
   useEffect(() => {
     syncOperatorRailSize();
@@ -836,29 +947,94 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     if (rightPanelTab !== 'inputs') return;
     const raf = window.requestAnimationFrame(() => {
       syncOperatorRailSize();
+      syncInputRailScrollState();
     });
     return () => window.cancelAnimationFrame(raf);
-  }, [rightPanelTab, inputsSection, composerMode, syncOperatorRailSize]);
+  }, [rightPanelTab, inputsSection, composerMode, syncInputRailScrollState, syncOperatorRailSize]);
 
   useEffect(() => {
     if (rightPanelTab !== 'inputs') return;
-    const rail = inputRailScrollRef.current;
-    if (!rail) return;
-    const handleScroll = () => syncInputRailScrollState();
+    const outerRail = inputRailScrollRef.current;
+    if (!outerRail) return;
+    const handleScroll = () => {
+      if (inputRailProgrammaticScrollRef.current) return;
+      syncInputRailScrollState();
+    };
+    // Capture-phase listener on the outer container catches scroll from all
+    // descendants (outer rail + any inner .input-section-scroll) without
+    // needing a snapshot list of targets.
+    outerRail.addEventListener('scroll', handleScroll, { capture: true, passive: true });
     handleScroll();
-    rail.addEventListener('scroll', handleScroll, { passive: true });
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       resizeObserver = new ResizeObserver(() => syncInputRailScrollState());
-      resizeObserver.observe(rail);
+      resizeObserver.observe(outerRail);
+      outerRail.querySelectorAll<HTMLElement>('.input-section-scroll').forEach((el) => resizeObserver?.observe(el));
+      if (inputRailTrackRef.current) resizeObserver.observe(inputRailTrackRef.current);
     }
     const raf = window.requestAnimationFrame(() => syncInputRailScrollState());
     return () => {
+      inputRailThumbDragRef.current = null;
       window.cancelAnimationFrame(raf);
-      rail.removeEventListener('scroll', handleScroll);
+      outerRail.removeEventListener('scroll', handleScroll, { capture: true });
       resizeObserver?.disconnect();
     };
-  }, [rightPanelTab, inputsSection, composerMode, operatorRailSize.height, syncInputRailScrollState]);
+  }, [rightPanelTab, inputsSection, composerMode, syncInputRailScrollState]);
+
+  // When the active IN section changes, scroll the outer rail to reveal the newly
+  // opened section so it is never hidden below the viewport.
+  useEffect(() => {
+    if (!inputsSection) return;
+    const outerRail = inputRailScrollRef.current;
+    if (!outerRail) return;
+    const raf = window.requestAnimationFrame(() => {
+      const openDetails = outerRail.querySelector<HTMLDetailsElement>('details[open]');
+      if (openDetails) {
+        openDetails.scrollIntoView({ block: 'nearest' });
+      }
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [inputsSection]);
+
+  useEffect(() => {
+    const handlePointerMove = (event: MouseEvent) => {
+      if (operatorRailResizeRef.current) {
+        const deltaX = operatorRailResizeRef.current.startX - event.clientX;
+        const nextWidth = Math.max(
+          MIN_OPERATOR_RAIL_WIDTH,
+          Math.min(MAX_OPERATOR_RAIL_WIDTH, Math.round(operatorRailResizeRef.current.startWidth + deltaX))
+        );
+        setOperatorRailWidth(nextWidth);
+      }
+
+      const thumbDrag = inputRailThumbDragRef.current;
+      const scrollState = inputRailScrollStateRef.current;
+      const track = inputRailTrackRef.current;
+      if (thumbDrag && track) {
+        const maxThumbTop = Math.max(0, track.clientHeight - thumbDrag.thumbHeight);
+        const nextThumbTop = Math.max(
+          0,
+          Math.min(maxThumbTop, event.clientY - thumbDrag.trackTop - thumbDrag.dragOffset)
+        );
+        if (scrollState.overflow) {
+          const progress = maxThumbTop <= 0 ? 0 : nextThumbTop / maxThumbTop;
+          applyInputRailGlobalProgress(progress);
+        }
+      }
+    };
+
+    const handlePointerUp = () => {
+      operatorRailResizeRef.current = null;
+      inputRailThumbDragRef.current = null;
+    };
+
+    window.addEventListener('mousemove', handlePointerMove);
+    window.addEventListener('mouseup', handlePointerUp);
+    return () => {
+      window.removeEventListener('mousemove', handlePointerMove);
+      window.removeEventListener('mouseup', handlePointerUp);
+    };
+  }, [applyInputRailGlobalProgress]);
 
   const handleSettingsDrag = useCallback((e: MouseEvent) => {
     const drag = settingsDragRef.current;
@@ -2011,7 +2187,49 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     }
   };
 
+  const addDesktopSource = async (sourceId: string, sourceName: string) => {
+    setDesktopSources(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          // Electron-specific desktop capture constraints
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+            minWidth: 1280,
+            maxWidth: 1920,
+            minHeight: 720,
+            maxHeight: 1080,
+          },
+        } as any,
+      });
+      const newLayer: Layer = {
+        id: generateId(), type: SourceType.SCREEN, label: sourceName || 'Screen',
+        visible: true, x: 0, y: 0, width: 1920, height: 1080, src: stream, zIndex: 0, style: {},
+      };
+      setLayers(prev => [newLayer, ...prev]);
+      setSelectedLayerId(newLayer.id);
+      setComposerMainLayerId((prev) => prev || newLayer.id);
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: err.message || 'Screen capture failed.' });
+    }
+  };
+
   const addScreenSource = async () => {
+    // In Electron the desktop API is available — show a custom source picker
+    // so the user can choose which screen or window to capture.
+    const desktop = (window as any).aetherDesktop;
+    if (typeof desktop?.getDesktopSources === 'function') {
+      try {
+        const sources = await desktop.getDesktopSources();
+        setDesktopSources(sources);
+      } catch (err: any) {
+        setStatusMsg({ type: 'error', text: 'Failed to list screen sources.' });
+      }
+      return;
+    }
+    // Web browser fallback — use the standard getDisplayMedia picker.
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       const newLayer: Layer = {
@@ -2024,7 +2242,8 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       setSelectedLayerId(newLayer.id);
       setComposerMainLayerId((prev) => prev || newLayer.id);
     } catch (err: any) {
-      if (err.name !== 'NotAllowedError') setStatusMsg({ type: 'error', text: err.message });
+      if (err.name === 'NotAllowedError') return;
+      setStatusMsg({ type: 'error', text: err.message || 'Screen capture failed.' });
     }
   };
 
@@ -2364,16 +2583,27 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       liveQualityRef.current = chosenQuality;
     }
     const qualitySettings: Record<StreamQualityPreset, { v: number; a: number; fps: number }> = {
-      high: { v: 3_000_000, a: 160_000, fps: 30 },
-      medium: { v: 2_200_000, a: 128_000, fps: 30 },
-      low: { v: 1_200_000, a: 96_000, fps: 30 },
+      // YouTube 720p30 target: 2.5–4 Mbps video + 192 kbps audio (AAC/Opus)
+      // YouTube 1080p30 target: 4–9 Mbps video — high mode targets 1080p
+      high:   { v: 4_500_000, a: 192_000, fps: 30 },
+      medium: { v: 2_500_000, a: 160_000, fps: 30 },
+      low:    { v: 1_200_000, a: 96_000,  fps: 30 },
     };
 
+    // WiFi saver: 900 kbps video is suitable for 480p previews on congested networks
     const wifiQuality = { v: 900_000, a: 64_000, fps: 24 };
     const effectiveQuality = wifiMode ? wifiQuality : qualitySettings[chosenQuality];
     const { v: vBits, a: aBits, fps } = effectiveQuality;
     const fallbackStage = Math.max(0, Number(opts?.fallbackStage || 0));
     const forceVideoOnly = !!opts?.videoOnly || fallbackStage >= 2;
+
+    // Wait for canvas to fully render all current layers before capturing.
+    // With 2+ video sources the draw loop needs 1-2 frames to settle; skipping
+    // this causes zero-size initial chunks and the relay never gets a keyframe.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    );
+    if (!liveIntentRef.current) return; // user cancelled during warmup
 
     const combinedStream = getMixedStream(fps, !forceVideoOnly);
     if (!combinedStream || combinedStream.getVideoTracks().length === 0) {
@@ -2446,6 +2676,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
     encoderChunkStateRef.current = { count: 0, lastAt: 0 };
     encoderStartAtRef.current = null;
+    encoderRetryInFlightRef.current = false; // always clear on fresh recorder start to prevent stuck "rolling" state
     resetEncoderBootstrap('initializing');
 
     const clearRecorderTimers = () => {
@@ -2673,6 +2904,15 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         }));
       } catch { }
     };
+
+    // Pre-send start-stream so the relay's FFmpeg is initialised and ready to
+    // receive data from the very first chunk. Without this, the first chunk
+    // triggers the command, FFmpeg starts late, and that first chunk (which
+    // contains the WebM header/keyframe) is discarded — YouTube then never
+    // receives a valid stream start signal.
+    if (!relayStartSent) {
+      relayStartSent = sendStartStreamCommand();
+    }
 
     try {
       recorder.start(500);
@@ -3331,9 +3571,27 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
 
     const placementById = result.placements;
     const mediaSet = new Set(mediaLayerIds);
+    // Ensure image/text overlay layers always render above camera placements.
+    // Composer layout assigns z-indexes starting at 100 (main) and 200+ (thumbs).
+    const maxPlacementZIndex = Object.values(placementById).reduce(
+      (max, p) => Math.max(max, p.zIndex),
+      0
+    );
     setLayers((prev) =>
       prev.map((layer) => {
-        if (!mediaSet.has(layer.id)) return layer;
+        if (!mediaSet.has(layer.id)) {
+          // Boost visible image/text layers above all camera placements so they
+          // don't get buried when the main camera expands to fill the canvas.
+          if (
+            layer.visible &&
+            (layer.type === SourceType.IMAGE || layer.type === SourceType.TEXT) &&
+            maxPlacementZIndex > 0 &&
+            layer.zIndex <= maxPlacementZIndex
+          ) {
+            return { ...layer, zIndex: maxPlacementZIndex + 10 };
+          }
+          return layer;
+        }
         const placement = placementById[layer.id];
         if (!placement) return { ...layer, visible: false };
 
@@ -3379,6 +3637,50 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     if (!themeLibrary) return;
     themeLibrary.open = true;
     themeLibrary.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, []);
+
+  const startOperatorRailResize = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    if (window.innerWidth < 768) return;
+    operatorRailResizeRef.current = {
+      startX: event.clientX,
+      startWidth: operatorRailWidth,
+    };
+    event.preventDefault();
+  }, [operatorRailWidth]);
+
+  const handleInputRailTrackMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const scrollState = inputRailScrollStateRef.current;
+    if (!scrollState.overflow) return;
+    const trackRect = event.currentTarget.getBoundingClientRect();
+    const thumbHeight = Math.max(48, scrollState.thumbHeight);
+    const maxThumbTop = Math.max(0, trackRect.height - thumbHeight);
+    const nextThumbTop = Math.max(
+      0,
+      Math.min(maxThumbTop, event.clientY - trackRect.top - (thumbHeight / 2))
+    );
+    const progress = maxThumbTop <= 0 ? 0 : nextThumbTop / maxThumbTop;
+    applyInputRailGlobalProgress(progress);
+    event.preventDefault();
+  }, [applyInputRailGlobalProgress]);
+
+  const startInputRailThumbDrag = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    const scrollState = inputRailScrollStateRef.current;
+    if (!scrollState.overflow) {
+      event.preventDefault();
+      return;
+    }
+    const track = event.currentTarget.parentElement;
+    if (!track) return;
+    const trackRect = track.getBoundingClientRect();
+    const thumbHeight = Math.max(48, scrollState.thumbHeight);
+    const thumbTop = scrollState.thumbTop;
+    inputRailThumbDragRef.current = {
+      trackTop: trackRect.top,
+      thumbHeight,
+      dragOffset: event.clientY - trackRect.top - thumbTop,
+    };
+    event.preventDefault();
+    event.stopPropagation();
   }, []);
 
   const previewSelectedLayoutTheme = useCallback(() => {
@@ -3937,17 +4239,13 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
   const activeThemeDef = getLayoutThemeDefinition(layoutTheme);
   const visibleLayoutThemes = LAYOUT_THEMES.filter((theme) => theme.packId === previewLayoutPack);
   const canvasLayoutRevision = buildCanvasLayoutRevision({
-    rightPanelTab,
     railWidth: operatorRailSize.width,
-    railHeight: operatorRailSize.height,
     viewportWidth: windowViewport.width,
     viewportHeight: windowViewport.height,
     composerMode,
   });
   const aiStatusText = aiHealth ? formatAiHealthMessage(aiHealth) : 'Checking local AI health...';
-  const inputSectionHeights = computeInputSectionBodyHeights({
-    railHeight: operatorRailSize.height,
-  });
+  const inputSectionHeights = computeInputSectionBodyHeights({ railHeight: operatorRailSize.height });
   const inputSectionBaseClassName = "rounded-2xl border border-[#173046] bg-[#05101b]";
   const inputSectionSummaryClassName = "sticky top-0 z-10 cursor-pointer list-none px-3 py-3 flex items-center justify-between bg-[#05101b]";
   const inputSectionBodyClassName = "min-h-0 overflow-hidden px-3 pb-3 pt-1";
@@ -3971,6 +4269,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     { id: 'scripture_focus' as const, label: 'Scripture', icon: '◧' },
     { id: 'sermon_split_left' as const, label: 'Split Left', icon: '◭' },
     { id: 'sermon_split_right' as const, label: 'Split Right', icon: '◮' },
+    { id: 'projector_speaker' as const, label: 'Projector + Spk', icon: '▩' },
   ];
   const layoutPreviewState: CinematicPresetPreview = {
     layoutTheme,
@@ -3983,9 +4282,28 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
     brandColors,
     swappedRoles: swapPending,
   };
+  const inputRailThumbHeightPx = inputRailScrollState.overflow
+    ? Math.max(48, inputRailScrollState.thumbHeight)
+    : INPUT_RAIL_DISABLED_THUMB_HEIGHT;
+  // When not overflowing, thumbHeight == trackHeight; center the disabled thumb deterministically.
+  const inputRailIdleThumbTop = Math.round(
+    Math.max(0, inputRailScrollState.thumbHeight - INPUT_RAIL_DISABLED_THUMB_HEIGHT) / 2
+  );
+  const inputRailThumbTopPx = inputRailScrollState.overflow
+    ? inputRailScrollState.thumbTop
+    : inputRailIdleThumbTop;
+  const inputRailThumbStyle: React.CSSProperties = {
+    top: `${inputRailThumbTopPx}px`,
+    height: `${inputRailThumbHeightPx}px`,
+  };
 
   return (
     <div className="fixed inset-0 flex flex-col w-full bg-aether-900/95 text-gray-200 font-sans selection:bg-aether-500 selection:text-white relative overflow-hidden">
+      <style>{`
+        .prop-scroll-area::-webkit-scrollbar { width: 7px; }
+        .prop-scroll-area::-webkit-scrollbar-track { background: #050d18; }
+        .prop-scroll-area::-webkit-scrollbar-thumb { background: linear-gradient(180deg,#22d3ee,#7c3aed); border-radius: 999px; }
+      `}</style>
       <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
 
       {statusMsg && (
@@ -4010,6 +4328,43 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
       )}
 
       {showDeviceSelector && <DeviceSelectorModal onSelect={addCameraSource} onClose={() => setShowDeviceSelector(false)} />}
+
+      {desktopSources && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-aether-900 border border-aether-700 rounded-xl w-[640px] max-h-[80vh] flex flex-col shadow-2xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-aether-700 shrink-0">
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <Monitor size={18} className="text-aether-400" />
+                Select Screen or Window
+              </h2>
+              <button onClick={() => setDesktopSources(null)} className="text-gray-400 hover:text-white transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4">
+              {desktopSources.length === 0 ? (
+                <div className="text-center text-gray-500 py-10">No screens or windows found.</div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  {desktopSources.map((src) => (
+                    <button
+                      key={src.id}
+                      onClick={() => addDesktopSource(src.id, src.name)}
+                      className="group border border-aether-700 rounded-xl overflow-hidden text-left hover:border-aether-400 hover:shadow-[0_0_0_1px_rgba(99,102,241,0.4)] transition-all"
+                    >
+                      <div className="bg-aether-800 w-full h-36 overflow-hidden">
+                        <img src={src.thumbnail} alt={src.name} className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200" />
+                      </div>
+                      <div className="px-3 py-2 text-xs font-medium text-gray-300 truncate group-hover:text-white">{src.name}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showQRModal && activePhoneSourceId && (
         <QRConnectModal
           roomId={roomId}
@@ -4144,7 +4499,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
         </div>
       </header>
 
-      <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:grid md:grid-cols-[56px_minmax(0,1fr)_384px]">
+      <div
+        className="flex flex-1 min-h-0 overflow-hidden flex-col md:grid"
+        style={windowViewport.width >= 768 ? { gridTemplateColumns: `56px minmax(0,1fr) ${operatorRailWidth}px` } : undefined}
+      >
         <aside className="w-14 hidden md:flex flex-col items-center py-4 gap-4 border-r border-aether-700 bg-aether-800/50">
           <SourceButton icon={<Camera size={20} />} label="Cam" onClick={() => setShowDeviceSelector(true)} />
           <SourceButton icon={<Smartphone size={20} />} label="Mob" onClick={createPhoneSource} disabled={phoneSlotsFull} />
@@ -4181,7 +4539,18 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
             onOpenDeviceSettings={() => setShowDeviceSelector(true)}
           />
         </main>
-        <div ref={operatorRailRef} className="h-full min-h-0 w-full shrink-0 border-t border-aether-700 bg-aether-900 md:border-l md:border-t-0">
+        <div ref={operatorRailRef} className="relative h-full min-h-0 w-full shrink-0 border-t border-aether-700 bg-aether-900 md:border-l md:border-t-0">
+          {rightPanelTab === 'inputs' && (
+            <button
+              type="button"
+              onMouseDown={startOperatorRailResize}
+              className="absolute bottom-0 left-0 top-0 hidden w-4 -translate-x-1/2 cursor-col-resize items-center justify-center md:flex"
+              aria-label="Resize input rail"
+              title="Drag to resize input rail"
+            >
+              <span className="h-28 w-2 rounded-full border border-cyan-400/30 bg-[linear-gradient(180deg,#0b1320,#10253a)] shadow-[0_0_12px_rgba(34,211,238,0.18)]" />
+            </button>
+          )}
           <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(4,8,18,0.98),rgba(2,6,14,0.98))] shadow-[-18px_0_40px_rgba(0,0,0,0.28)]">
           <div className="flex shrink-0 border-b border-[#163047] bg-[#050d18]">
             <button onClick={() => setRightPanelTab('properties')} className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-[0.18em] flex items-center justify-center gap-1.5 ${rightPanelTab === 'properties' ? 'bg-[#091525] text-white' : 'text-gray-500 hover:text-gray-300'}`}><Sliders size={12} /> Prop</button>
@@ -4221,7 +4590,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
               />
             )}
             {rightPanelTab === 'inputs' && (
-              <div className="h-full w-full min-w-0 overflow-hidden p-2">
+              <div className="relative h-full w-full min-w-0 overflow-hidden p-2">
 
                 {/* ── Toggle Switch Helper ── */}
                 {/* Inline CSS for custom toggle switches */}
@@ -4246,12 +4615,10 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   .status-live { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); }
                   .status-pending { background: rgba(234,179,8,0.12); color: #fbbf24; border: 1px solid rgba(234,179,8,0.25); }
                   .status-error { background: rgba(239,68,68,0.12); color: #f87171; border: 1px solid rgba(239,68,68,0.25); }
-                  .input-rail-scroll { scrollbar-gutter: stable both-edges; scrollbar-width: thin; scrollbar-color: #22d3ee #07111d; }
-                  .input-rail-scroll::-webkit-scrollbar { width: 14px; }
-                  .input-rail-scroll::-webkit-scrollbar-track { background: #07111d; border-left: 1px solid #173046; }
-                  .input-rail-scroll::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #22d3ee, #7c3aed); border-radius: 999px; border: 2px solid #07111d; }
-                  .input-rail-scroll { scrollbar-width: none; }
+                  .input-rail-scroll { scrollbar-gutter: stable both-edges; scrollbar-width: none; -ms-overflow-style: none; }
                   .input-rail-scroll::-webkit-scrollbar { width: 0; height: 0; }
+                  .input-rail-scroll::-webkit-scrollbar-track { background: transparent; border: 0; }
+                  .input-rail-scroll::-webkit-scrollbar-thumb { background: transparent; border: 0; }
                   .input-section-scroll { scrollbar-gutter: stable both-edges; scrollbar-width: thin; scrollbar-color: #22d3ee #050d18; }
                   .input-section-scroll::-webkit-scrollbar { width: 12px; }
                   .input-section-scroll::-webkit-scrollbar-track { background: #050d18; border-left: 1px solid rgba(23, 48, 70, 0.7); border-radius: 999px; }
@@ -4259,35 +4626,28 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                   @keyframes pulse-glow { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); } 50% { box-shadow: 0 0 12px 4px rgba(239,68,68,0.2); } }
                   .emergency-pulse { animation: pulse-glow 1.5s ease-in-out infinite; }
                 `}</style>
-                <div className="mx-auto flex h-full min-h-0 w-full max-w-[372px] flex-col overflow-hidden rounded-[22px] border border-[#173046] bg-[#020813] shadow-[0_18px_50px_rgba(0,0,0,0.34)]">
+                <div
+                  className="mx-auto flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[22px] border border-[#173046] bg-[#020813] shadow-[0_18px_50px_rgba(0,0,0,0.34)]"
+                  style={{ maxWidth: Math.max(372, operatorRailWidth - 12) }}
+                >
                   <div className="shrink-0 border-b border-[#173046] bg-[linear-gradient(180deg,rgba(7,16,28,0.96),rgba(3,8,18,0.96))] px-3 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-[11px] font-bold uppercase tracking-[0.28em] text-cyan-300">Input Control Deck</div>
-                        <div className="mt-1 text-[12px] font-semibold text-white">Machine-room tools for sources, layouts, and broadcast control.</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[11px] font-bold uppercase tracking-[0.28em] text-cyan-300">Input Control Deck</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-slate-400">{cameraSources.length} src</span>
+                        <span className={`text-[10px] font-semibold ${aiHealth?.ok ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          {aiHealth?.ok ? '● AI' : '○ AI'}
+                        </span>
+                        <span className="rounded-full border border-[#26445c] bg-[#08101c] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-300">
+                          {composerMode ? 'Armed' : 'Standby'}
+                        </span>
                       </div>
-                      <div className="rounded-full border border-[#26445c] bg-[#08101c] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-300">
-                        {composerMode ? 'Canvas Armed' : 'Standby'}
-                      </div>
-                    </div>
-                    <div className="mt-3 grid grid-cols-1 gap-2 text-[10px]">
-                      <div className="rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-2">
-                        <div className="uppercase tracking-[0.2em] text-slate-500">Sources</div>
-                        <div className="mt-1 text-white">{cameraSources.length} online</div>
-                      </div>
-                      <div className={`rounded-xl border px-3 py-2 ${aiHealth?.ok ? 'border-emerald-500/25 bg-emerald-500/10' : 'border-amber-500/20 bg-amber-500/10'}`}>
-                        <div className="uppercase tracking-[0.2em] text-slate-500">AI Status</div>
-                        <div className={`mt-1 ${aiHealth?.ok ? 'text-emerald-200' : 'text-amber-200'}`}>{aiHealth?.ok ? 'Local AI ready' : 'Local AI diagnostic'}</div>
-                      </div>
-                    </div>
-                    <div className="mt-2 rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-2 text-[10px] leading-relaxed text-slate-400">
-                      {aiStatusText}
                     </div>
                   </div>
                   <div className="relative flex-1 min-h-0 overflow-hidden">
                     <div
                       ref={inputRailScrollRef}
-                      className="input-rail-scroll h-full min-h-0 overflow-x-hidden overflow-y-scroll overscroll-contain px-2 py-2 pb-4 pr-4 space-y-2"
+                      className="input-rail-scroll h-full min-h-0 overflow-x-hidden overflow-y-scroll overscroll-contain px-2 py-2 pb-4 pr-6 space-y-2"
                     >
 
                 {/* ─── INPUT MANAGER ─── */}
@@ -4408,19 +4768,49 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                       <button
                         type="button"
                         onClick={() => setComposerMode((prev) => !prev)}
-                        className="rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-2 text-left transition-colors hover:border-cyan-400/70 hover:bg-[#0a1624]"
+                        className="rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-3 text-left transition-colors hover:border-cyan-400/70 hover:bg-[#0a1624]"
                       >
-                        <div className="uppercase tracking-[0.2em] text-slate-500">Canvas Mode</div>
-                        <div className="mt-1 text-white">{composerMode ? 'Armed for broadcast composition' : 'Standby until enabled'}</div>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="uppercase tracking-[0.2em] text-slate-500">Canvas Mode</div>
+                            <div className="mt-1 text-white">{composerMode ? 'Armed for broadcast composition' : 'Standby until enabled'}</div>
+                            <div className="mt-1 text-[10px] text-cyan-300">{composerMode ? 'Click to park the composer' : 'Click to arm the composer'}</div>
+                          </div>
+                          <div className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.2em] text-cyan-200">
+                            {composerMode ? 'Armed' : 'Standby'}
+                          </div>
+                        </div>
                       </button>
                       <button
                         type="button"
                         onClick={openLayoutThemeLibrary}
-                        className="rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-2 text-left transition-colors hover:border-cyan-400/70 hover:bg-[#0a1624]"
+                        className="rounded-xl border border-[#1d3346] bg-[#07111d] px-3 py-3 text-left transition-colors hover:border-cyan-400/70 hover:bg-[#0a1624]"
                       >
-                        <div className="uppercase tracking-[0.2em] text-slate-500">Live Theme</div>
-                        <div className="mt-1 text-white">{activeThemeDef.name}</div>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="uppercase tracking-[0.2em] text-slate-500">Live Theme</div>
+                            <div className="mt-1 text-white">{activeThemeDef.name}</div>
+                            <div className="mt-1 text-[10px] text-cyan-300">Open the theme library</div>
+                          </div>
+                          <Sparkles size={14} className="mt-0.5 text-cyan-300" />
+                        </div>
                       </button>
+                    </div>
+                  </div>
+                  {/* Quick Layout Buttons — one-click layout switching */}
+                  <div className="mb-3">
+                    <div className="text-[10px] uppercase tracking-[0.24em] text-gray-500 mb-2">Quick Layouts</div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {manualLayoutOptions.map((opt) => (
+                        <button
+                          key={opt.id}
+                          onClick={() => runTransition(() => applyComposerLayoutState(undefined, opt.id as ComposerLayoutTemplate))}
+                          className={`flex flex-col items-center gap-1 rounded-xl border py-2 px-1 text-[10px] transition-all ${layoutTemplate === opt.id ? 'border-cyan-400 bg-cyan-400/10 text-cyan-200' : 'border-aether-700 bg-aether-900/60 text-gray-300 hover:border-aether-500 hover:text-white'}`}
+                        >
+                          <span className="text-base leading-none">{opt.icon}</span>
+                          <span className="leading-tight text-center">{opt.label}</span>
+                        </button>
+                      ))}
                     </div>
                   </div>
                   <details ref={layoutThemeLibraryRef} className="mb-4 rounded-2xl border border-aether-700/70 bg-aether-950/40 px-3 py-2">
@@ -4890,6 +5280,7 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                         <option value="scripture_focus">◧ Scripture Focus</option>
                         <option value="sermon_split_left">◭ Sermon Split Left</option>
                         <option value="sermon_split_right">◮ Sermon Split Right</option>
+                        <option value="projector_speaker">▩ Projector + Speaker</option>
                         <option value="freeform">◇ Freeform</option>
                       </select>
                       <button onClick={saveScenePreset} className="section-btn section-btn-primary">Save</button>
@@ -5030,25 +5421,28 @@ export const StudioCore: React.FC<StudioProps> = ({ user, onBack }) => {
                     );
                   })}
                 </CollapsibleSection>
-                    </div>
-                    <div className="pointer-events-none absolute inset-y-3 right-1 flex w-3 justify-center">
-                      <div className="relative h-full w-[6px] rounded-full border border-[#173046] bg-[#07111d]">
-                        {inputRailScrollState.overflow ? (
-                          <div
-                            className="absolute left-0 right-0 rounded-full bg-[linear-gradient(180deg,#22d3ee,#7c3aed)] shadow-[0_0_12px_rgba(34,211,238,0.35)]"
-                            style={{
-                              top: `${inputRailScrollState.thumbTop}px`,
-                              height: `${inputRailScrollState.thumbHeight}px`,
-                            }}
-                          />
-                        ) : (
-                          <div className="absolute left-0 right-0 top-0 h-10 rounded-full bg-[#0d1b2b]" />
-                        )}
-                      </div>
+                {/* Spacer: keeps the outer rail overflowing so the scroll thumb always has travel range */}
+                <div aria-hidden="true" className="shrink-0" style={{ height: '400px' }} />
                     </div>
                   </div>
+                </div>
+                <div className="absolute inset-y-3 right-0 z-20 flex w-5 justify-center">
+                  <div
+                    ref={inputRailTrackRef}
+                    onMouseDown={handleInputRailTrackMouseDown}
+                    className={`relative h-full w-[8px] rounded-full border shadow-[inset_0_0_0_1px_rgba(3,8,18,0.35)] ${inputRailScrollState.overflow ? 'cursor-pointer border-[#173046] bg-[#07111d]' : 'cursor-default border-[#1b2a3a] bg-[#0a1320]'}`}
+                    role="presentation"
+                  >
+                    <button
+                      type="button"
+                      onMouseDown={startInputRailThumbDrag}
+                      className={`absolute left-[-2px] right-[-2px] rounded-full border transition-colors ${inputRailScrollState.overflow ? 'border-cyan-300/70 bg-[linear-gradient(180deg,#22d3ee,#7c3aed)] shadow-[0_0_14px_rgba(34,211,238,0.45)] cursor-grab active:cursor-grabbing' : 'border-cyan-200/70 bg-[linear-gradient(180deg,#93c5fd,#64748b)] shadow-[0_0_10px_rgba(147,197,253,0.35)] cursor-default'}`}
+                      style={inputRailThumbStyle}
+                      aria-label="Scroll input controls"
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
             )}
           </div>
         </div>

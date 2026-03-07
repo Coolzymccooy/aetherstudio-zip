@@ -7,7 +7,8 @@ export type ComposerLayoutTemplate =
   | "speaker_focus"
   | "scripture_focus"
   | "sermon_split_left"
-  | "sermon_split_right";
+  | "sermon_split_right"
+  | "projector_speaker";
 
 export type BackgroundStyleId =
   | "blurred_camera"
@@ -33,7 +34,8 @@ export type LayoutThemeId =
   | "broadcast_studio"
   | "clean_minimal"
   | "cinematic_dark"
-  | "creator_mode";
+  | "creator_mode"
+  | "projector_speaker";
 
 export type AspectRatioBehavior = "cover" | "contain" | "smart";
 
@@ -134,6 +136,22 @@ export const LAYOUT_THEMES: LayoutThemeDefinition[] = [
       { id: "lumina", x: 0.02, y: 0.08, width: 0.63, height: 0.82, primary: true },
       { id: "cam", x: 0.71, y: 0.22, width: 0.2, height: 0.26 },
       { id: "cam-2", x: 0.71, y: 0.54, width: 0.2, height: 0.18 },
+    ],
+  },
+  {
+    id: "projector_speaker",
+    name: "Projector + Speaker",
+    packId: "church_broadcast",
+    layoutTemplate: "projector_speaker",
+    description: "Projector/screen fills the left panel, live speaker camera fills the right — one-click church broadcast layout.",
+    backgroundStyle: "light_studio",
+    frameStyle: "floating",
+    motionStyle: "smooth",
+    safeMargins: { top: 14, right: 18, bottom: 14, left: 18 },
+    aspectRatioBehavior: "contain",
+    preview: [
+      { id: "lumina", x: 0.0, y: 0.0, width: 0.57, height: 1.0, primary: true },
+      { id: "cam",   x: 0.59, y: 0.04, width: 0.39, height: 0.92 },
     ],
   },
   {

@@ -419,6 +419,83 @@ const buildGrid2x2 = (
   return placements;
 };
 
+// ── Projector + Speaker ─────────────────────────────────────────────────────
+// Left panel  → screen/projector capture (contain, full slide visible)
+// Right panel → live camera with floating frame + cover fill (no bars)
+const buildProjectorSpeaker = (
+  visibleLayerIds: string[],
+  mainLayerId: string,
+  bounds: Bounds,
+  frameStyle: FrameStyleId
+) => {
+  const placements: Record<string, ComposerPlacement> = {};
+  const gap = 14;
+  const slideRatio = 0.58;
+  const slideW = Math.round(bounds.width * slideRatio);
+  const camW = bounds.width - slideW - gap;
+  const camX = bounds.x + slideW + gap;
+  const camYInset = Math.round(bounds.height * 0.03);
+  const secondary = visibleLayerIds.filter((id) => id !== mainLayerId);
+
+  // Slide / projector panel — flat frame, contain so the full slide is always visible
+  placements[mainLayerId] = {
+    x: bounds.x,
+    y: bounds.y,
+    width: slideW,
+    height: bounds.height,
+    zIndex: 100,
+    visible: true,
+    styleAdjustments: {
+      rounded: 10,
+      frameStyle: "flat",
+      shadowColor: "rgba(15,23,42,0.4)",
+      shadowBlur: 14,
+      shadowOpacity: 0.12,
+      highlightOpacity: 0,
+      cardPadding: 0,
+      cardBackground: "rgba(0,0,0,0)",
+      aspectMode: "contain",
+      focusRole: "primary",
+    },
+  };
+
+  // Primary camera — fill the right panel with no empty bars
+  const primaryCam = secondary[0];
+  if (primaryCam) {
+    placements[primaryCam] = {
+      x: camX,
+      y: bounds.y + camYInset,
+      width: camW,
+      height: bounds.height - 2 * camYInset,
+      zIndex: 110,
+      visible: true,
+      styleAdjustments: {
+        ...frameAdjustmentsForRole("secondary", frameStyle, "cover"),
+        aspectMode: "cover",
+      },
+    };
+  }
+
+  // Extra cameras stacked as small thumbnails at bottom-right
+  secondary.slice(1).forEach((layerId, idx) => {
+    const thumbH = Math.round(camW * 0.38);
+    placements[layerId] = {
+      x: camX,
+      y: bounds.y + bounds.height - thumbH * (idx + 1) - 10 * (idx + 1),
+      width: camW,
+      height: thumbH,
+      zIndex: 200 + idx,
+      visible: true,
+      styleAdjustments: {
+        ...frameAdjustmentsForRole("support", frameStyle, "cover"),
+        aspectMode: "cover",
+      },
+    };
+  });
+
+  return placements;
+};
+
 const buildSermonSplit = (
   visibleLayerIds: string[],
   mainLayerId: string,
@@ -664,6 +741,16 @@ export const computeComposerLayout = (input: ComposerLayoutInput): ComposerLayou
         "right",
         renderMeta.frameStyle,
         renderMeta.aspectRatioBehavior
+      )
+    );
+  } else if (input.layoutTemplate === "projector_speaker") {
+    Object.assign(
+      placements,
+      buildProjectorSpeaker(
+        composedLayerIds,
+        resolvedMainLayerId as string,
+        bounds,
+        renderMeta.frameStyle
       )
     );
   } else {

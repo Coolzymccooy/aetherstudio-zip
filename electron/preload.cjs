@@ -42,4 +42,6 @@ contextBridge.exposeInMainWorld("aetherDesktop", {
     ipcRenderer.on("aether-updater:status", listener);
     return () => ipcRenderer.removeListener("aether-updater:status", listener);
   },
+  // Returns [{id, name, thumbnail}] for screen/window capture sources.
+  getDesktopSources: () => ipcRenderer.invoke("aether:get-desktop-sources"),
 });
